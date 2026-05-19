@@ -1,0 +1,35 @@
+@maxi:1.0.0
+
+# Sports Statistics Schema
+# Shared by all server and client implementations.
+# Reference this file in API responses with: @schema:sports.mxs
+
+# ---------------------------------------------------------------------------
+# Core types
+# ---------------------------------------------------------------------------
+
+# Player — a footballer registered to a team
+# Fields: id | name (required) | position | birthYear | teamId
+P:Player(id:int|name(!)|position:enum[forward,midfielder,defender,goalkeeper]|birthYear:int|teamId:int)
+
+# Team — a football club
+# Fields: id | name (required) | city (required) | founded | coach (required)
+T:Team(id:int|name(!)|city(!)|founded:int|coach(!))
+
+# PlayerStats — per-player match statistics
+# Fields: playerId | goals (default 0) | assists (default 0) | minutesPlayed (default 0)
+S:PlayerStats(playerId:int|goals:int=0|assists:int=0|minutesPlayed:int=0)
+
+# Game — a match between two teams
+# Fields: id | homeTeamId | awayTeamId | date (required) | status | homeScore (default 0) | awayScore (default 0)
+G:Game(id:int|homeTeamId:int|awayTeamId:int|date:str@date(!)|status:enum[scheduled,live,finished,cancelled]|homeScore:int=0|awayScore:int=0)
+
+# GameDetail — full match statistics with nested player stats arrays
+# Fields: gameId | homePlayers (array of PlayerStats) | awayPlayers (array of PlayerStats)
+D:GameDetail(gameId:int|homePlayers:S[]|awayPlayers:S[])
+
+# Transfer — a player moving between clubs
+# fee is optional (free transfers have no fee)
+# player, fromTeam, toTeam are object references resolved via the P/T record pool
+# Fields: id | player:Player | fromTeam:Team | toTeam:Team | date (required) | fee
+X:Transfer(id:int|player:P|fromTeam:T|toTeam:T|date:str@date(!)|fee:decimal)

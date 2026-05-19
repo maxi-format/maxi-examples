@@ -1,0 +1,44 @@
+[
+    {
+        "id": 1,
+        "name": "Alice Müller",
+        "position": "forward",
+        "birthYear": 1998,
+        "teamId": 1
+    },
+    {
+        "id": 2,
+        "name": "Ben Nakamura",
+        "position": "midfielder",
+        "birthYear": 1995,
+        "teamId": 1
+    },
+    {
+        "id": 3,
+        "name": "Carlos Rivera",
+        "position": "defender",
+        "birthYear": 2000,
+        "teamId": 1
+    },
+    {
+        "id": 4,
+        "name": "Diana Chen",
+        "position": "goalkeeper",
+        "birthYear": 1997,
+        "teamId": 2
+    },
+    {
+        "id": 5,
+        "name": "Elias Boateng",
+        "position": "midfielder",
+        "birthYear": 1995,
+        "teamId": 2
+    },
+    {
+        "id": 6,
+        "name": "Fatima Al-Sayed",
+        "position": "midfielder",
+        "birthYear": 1996,
+        "teamId": 2
+    }
+]

@@ -1,0 +1,15 @@
+[
+  {
+    "gameId": 1,
+    "homePlayers": [
+      { "playerId": 1, "goals": 2, "assists": 0, "minutesPlayed": 90 },
+      { "playerId": 2, "goals": 1, "assists": 2, "minutesPlayed": 85 },
+      { "playerId": 3, "goals": 0, "assists": 1, "minutesPlayed": 90 }
+    ],
+    "awayPlayers": [
+      { "playerId": 4, "goals": 0, "assists": 0, "minutesPlayed": 90 },
+      { "playerId": 5, "goals": 1, "assists": 0, "minutesPlayed": 78 },
+      { "playerId": 6, "goals": 0, "assists": 1, "minutesPlayed": 90 }
+    ]
+  }
+]

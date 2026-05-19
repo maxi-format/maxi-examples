@@ -1,0 +1,159 @@
+services:
+
+  server-js:
+    build:
+      context: .
+      dockerfile: server-js/Dockerfile
+    ports:
+      - "8060:4000"
+    environment:
+      PORT: "4000"
+    networks:
+      - maxi-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/players"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server-py:
+    build:
+      context: .
+      dockerfile: server-py/Dockerfile
+    ports:
+      - "8070:5000"
+    environment:
+      PORT: "5000"
+    networks:
+      - maxi-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/players')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server-php:
+    build:
+      context: .
+      dockerfile: server-php/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+    networks:
+      - maxi-net
+    healthcheck:
+      test: ["CMD", "php", "-r", "file_get_contents('http://localhost:8080/players') or exit(1);"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server-go:
+    build:
+      context: .
+      dockerfile: server-go/Dockerfile
+    ports:
+      - "8050:8050"
+    environment:
+      PORT: "8050"
+    networks:
+      - maxi-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8050/players"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server-java:
+    build:
+      context: .
+      dockerfile: server-java/Dockerfile
+    ports:
+      - "8040:8040"
+    environment:
+      PORT: "8040"
+    networks:
+      - maxi-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8040/players"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  client-browser:
+    build:
+      context: .
+      dockerfile: client-js/Dockerfile
+    ports:
+      - "8090:80"
+    networks:
+      - maxi-net
+
+  client-js-cli:
+    build:
+      context: .
+      dockerfile: client-js/Dockerfile.cli
+    environment:
+      BASE_URL: "http://server-js:4000"
+    depends_on:
+      server-js:
+        condition: service_healthy
+    networks:
+      - maxi-net
+    profiles: ["clients"]
+
+  client-py:
+    build:
+      context: .
+      dockerfile: client-py/Dockerfile
+    environment:
+      BASE_URL: "http://server-py:5000"
+    depends_on:
+      server-py:
+        condition: service_healthy
+    networks:
+      - maxi-net
+    profiles: ["clients"]
+
+  client-php:
+    build:
+      context: .
+      dockerfile: client-php/Dockerfile
+    environment:
+      BASE_URL: "http://server-php:8080"
+    depends_on:
+      server-php:
+        condition: service_healthy
+    networks:
+      - maxi-net
+    profiles: ["clients"]
+
+  client-go:
+    build:
+      context: .
+      dockerfile: client-go/Dockerfile
+    environment:
+      BASE_URL: "http://server-go:8050"
+    depends_on:
+      server-go:
+        condition: service_healthy
+    networks:
+      - maxi-net
+    profiles: ["clients"]
+
+  client-java:
+    build:
+      context: .
+      dockerfile: client-java/Dockerfile
+    environment:
+      BASE_URL: "http://server-java:8040"
+    depends_on:
+      server-java:
+        condition: service_healthy
+    networks:
+      - maxi-net
+    profiles: ["clients"]
+
+networks:
+  maxi-net:
+    driver: bridge

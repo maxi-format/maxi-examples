@@ -1,0 +1,15 @@
+{
+  "name": "maxi-sports-server-js",
+  "version": "1.0.0",
+  "description": "Sports Statistics API server — MAXI format example (Node.js / Express)",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "@maxi-format/maxi": "^0.1.0"
+  }
+}

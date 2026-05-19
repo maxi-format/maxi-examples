@@ -1,0 +1,4 @@
+[
+  { "id": 1, "name": "Thunder FC",   "city": "Berlin",    "founded": 1923, "coach": "Marco Rossi" },
+  { "id": 2, "name": "Storm United", "city": "Amsterdam", "founded": 1948, "coach": "Yuki Tanaka" }
+]

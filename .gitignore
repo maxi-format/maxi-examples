@@ -1,0 +1,27 @@
+# Java
+target/
+*.class
+*.jar
+
+# Node.js
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# PHP
+vendor/
+composer.lock
+
+# Go
+*.exe
+*.test
+client-go/client-go
+server-go/server-go
+
+# OS
+.DS_Store
+Thumbs.db

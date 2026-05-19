@@ -1,0 +1,26 @@
+[
+  {
+    "id": 1,
+    "playerId": 3,
+    "fromTeamId": 2,
+    "toTeamId": 1,
+    "date": "2024-07-01",
+    "fee": 4500000.00
+  },
+  {
+    "id": 2,
+    "playerId": 5,
+    "fromTeamId": 1,
+    "toTeamId": 2,
+    "date": "2025-01-15",
+    "fee": 7200000.00
+  },
+  {
+    "id": 3,
+    "playerId": 2,
+    "fromTeamId": 2,
+    "toTeamId": 1,
+    "date": "2025-06-30",
+    "fee": null
+  }
+]

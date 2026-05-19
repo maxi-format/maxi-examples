@@ -1,0 +1,15 @@
+FROM node:20-alpine
+
+WORKDIR /app/client-js
+
+# Install dependencies
+COPY client-js/package.json client-js/package-lock.json* ./
+RUN npm install
+
+# Copy client source
+COPY client-js/ ./
+
+# Shared schema (needed by loadSchema)
+COPY shared/ /app/shared/
+
+CMD ["node", "client.js"]
