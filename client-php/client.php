@@ -18,11 +18,23 @@ require_once __DIR__ . '/vendor/autoload.php';
 use Maxi\Maxi;
 
 // ---------------------------------------------------------------------------
+// Model DTOs — mirror shared/sports.mxs types
+// ---------------------------------------------------------------------------
+
+require_once __DIR__ . '/model/Team.php';
+require_once __DIR__ . '/model/Player.php';
+require_once __DIR__ . '/model/PlayerStats.php';
+require_once __DIR__ . '/model/Game.php';
+require_once __DIR__ . '/model/GameDetail.php';
+require_once __DIR__ . '/model/Transfer.php';
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
 $BASE_URL = rtrim(getenv('BASE_URL') ?: 'http://localhost:8060', '/');
 $SHARED   = realpath(__DIR__ . '/../shared');
+$maxi     = new Maxi();
 
 $loadSchema = fn(string $name) => file_get_contents(
     $SHARED . '/' . preg_replace('/[^a-zA-Z0-9._-]/', '', $name)
@@ -158,7 +170,7 @@ function transfer_str(array $values, array $reg): string
     $pName  = is_array($player)   ? $player['name']   : "#$pRef";
     $fName  = is_array($fromTeam) ? $fromTeam['name'] : "#$fRef";
     $tName  = is_array($toTeam)   ? $toTeam['name']   : "#$tRef";
-    $feeStr = ($fee !== null && $fee !== '') ? '€' . number_format((float)$fee, 0, '.', ',') : 'free';
+    $feeStr = ($fee !== null && $fee !== '') ? '€' . number_format((float)$fee, 0, '.', '') : 'free';
     return "  Transfer(#$id | $pName | $fName → $tName | $date | $feeStr)";
 }
 
@@ -167,28 +179,31 @@ function transfer_str(array $values, array $reg): string
 // ---------------------------------------------------------------------------
 
 // ── 1. GET /players ──────────────────────────────────────────────────────────
-section('GET /players  (raw Maxi::parse → positional values)');
+section('GET /players  (raw parse → positional values)');
 {
     $text   = http_get("$BASE_URL/players");
-    $result = Maxi::parse($text, ['loadSchema' => $loadSchema]);
-    print_table(['id', 'name', 'position', 'birthYear', 'teamId'],
-        array_map(fn($r) => $r->values, $result->records));
+    $result = $maxi->parse($text, ['loadSchema' => $loadSchema]);
+    $pRecs = array_values(array_filter($result->records, fn($r) => $r->alias === 'P'));
+    print_table(['id', 'name', 'position', 'birthYear', 'team'],
+        array_map(fn($r) => $r->values, $pRecs));
 }
 
 // ── 2. GET /teams ─────────────────────────────────────────────────────────────
 section('GET /teams');
+$fetchedTeams = [];
 {
     $text   = http_get("$BASE_URL/teams");
-    $result = Maxi::parse($text, ['loadSchema' => $loadSchema]);
+    $hydrated = $maxi->parseAutoAs($text, [Team::class], ['loadSchema' => $loadSchema]);
+    $fetchedTeams = $hydrated->data['T'] ?? [];
     print_table(['id', 'name', 'city', 'founded', 'coach'],
-        array_map(fn($r) => $r->values, $result->records));
+        array_map(fn($t) => [$t->id, $t->name, $t->city, $t->founded, $t->coach], $fetchedTeams));
 }
 
 // ── 3. GET /teams/1 — team + roster ──────────────────────────────────────────
 section('GET /teams/1  (team with roster)');
 {
     $text   = http_get("$BASE_URL/teams/1");
-    $result = Maxi::parse($text, ['loadSchema' => $loadSchema]);
+    $result = $maxi->parse($text, ['loadSchema' => $loadSchema]);
     $types  = array_keys((array)$result->schema->types);
     echo "  Schema types in response: " . implode(', ', $types) . "\n";
     foreach ($result->records as $rec) {
@@ -200,25 +215,40 @@ section('GET /teams/1  (team with roster)');
 section('GET /games');
 {
     $text   = http_get("$BASE_URL/games");
-    $result = Maxi::parse($text, ['loadSchema' => $loadSchema]);
+    $result = $maxi->parse($text, ['loadSchema' => $loadSchema]);
+    $reg    = $result->objectRegistry ?? [];
+    $games = array_values(array_filter($result->records, fn($r) => $r->alias === 'G'));
     print_table(['id', 'home', 'away', 'date', 'status', 'score'],
         array_map(fn($r) => [
-            $r->values[0], $r->values[1], $r->values[2],
+            $r->values[0],
+            (is_array($rt = resolve($r->values[1], 'T', $reg)) ? $rt['name'] : $r->values[1]),
+            (is_array($at = resolve($r->values[2], 'T', $reg)) ? $at['name'] : $r->values[2]),
             $r->values[3], $r->values[4], "{$r->values[5]}–{$r->values[6]}",
-        ], $result->records));
+        ], $games));
 }
 
 // ── 5. GET /games/1 — nested PlayerStats arrays ───────────────────────────────
 section('GET /games/1  (GameDetail with nested S[] arrays)');
 {
     $text   = http_get("$BASE_URL/games/1");
-    $result = Maxi::parse($text, ['loadSchema' => $loadSchema]);
+    $result = $maxi->parse($text, ['loadSchema' => $loadSchema]);
+    $reg    = $result->objectRegistry ?? [];
+    $toRows = function($arr) use ($reg): array {
+        return array_map(function($s) use ($reg) {
+            $s    = (array)$s;
+            $p    = resolve($s['player'] ?? null, 'P', $reg);
+            $name = is_array($p) ? $p['name'] : ('#' . ($s['player'] ?? '?'));
+            return [$name, (string)($s['goals'] ?? 0), (string)($s['assists'] ?? 0), (string)($s['minutesPlayed'] ?? 0)];
+        }, (array)$arr);
+    };
     foreach ($result->records as $rec) {
         if ($rec->alias !== 'D') continue;
         [$gameId, $home, $away] = $rec->values;
         echo "  GameDetail for game $gameId:\n";
-        echo "  Home: " . json_encode($home, JSON_UNESCAPED_UNICODE) . "\n";
-        echo "  Away: " . json_encode($away, JSON_UNESCAPED_UNICODE) . "\n";
+        echo "  Home:\n";
+        print_table(['name', 'goals', 'assists', 'minutes'], $toRows($home));
+        echo "  Away:\n";
+        print_table(['name', 'goals', 'assists', 'minutes'], $toRows($away));
     }
 }
 
@@ -226,7 +256,7 @@ section('GET /games/1  (GameDetail with nested S[] arrays)');
 section('GET /transfers  (object references → resolve via objectRegistry)');
 {
     $text   = http_get("$BASE_URL/transfers");
-    $result = Maxi::parse($text, ['loadSchema' => $loadSchema]);
+    $result = $maxi->parse($text, ['loadSchema' => $loadSchema]);
     $reg    = $result->objectRegistry ?? [];
     echo "\n  Hydrated Transfer records (player/team resolved from objectRegistry):\n";
     foreach ($result->records as $rec) {
@@ -243,7 +273,7 @@ section('GET /transfers  (object references → resolve via objectRegistry)');
 section('GET /players/3/transfers  (Carlos Rivera transfer history)');
 {
     $text   = http_get("$BASE_URL/players/3/transfers");
-    $result = Maxi::parse($text, ['loadSchema' => $loadSchema]);
+    $result = $maxi->parse($text, ['loadSchema' => $loadSchema]);
     $reg    = $result->objectRegistry ?? [];
     foreach ($result->records as $rec) {
         if ($rec->alias !== 'X') continue;
@@ -254,40 +284,42 @@ section('GET /players/3/transfers  (Carlos Rivera transfer history)');
 // ── 8. POST /players — send MAXI body, receive MAXI response ─────────────────
 section('POST /players  (MAXI request body → MAXI response)');
 {
-    $T_PLAYER = [
-        'alias' => 'P', 'name' => 'Player',
-        'fields' => [
-            ['name' => 'id',        'typeExpr' => 'int'],
-            ['name' => 'name',      'constraints' => [['type' => 'required']]],
-            ['name' => 'position',  'typeExpr' => 'enum[forward,midfielder,defender,goalkeeper]'],
-            ['name' => 'birthYear', 'typeExpr' => 'int'],
-            ['name' => 'teamId',    'typeExpr' => 'int'],
-        ],
-    ];
-    $newPlayer   = ['id' => 0, 'name' => 'Luca Bianchi', 'position' => 'forward', 'birthYear' => 2001, 'teamId' => 1];
-    $requestBody = Maxi::dump([$newPlayer], [
-        'schemaFile' => 'sports.mxs', 'defaultAlias' => 'P',
-        'includeTypes' => false, 'types' => [$T_PLAYER],
+    $thunderFC   = $fetchedTeams[0] ?? new Team(id: 1);
+    $newPlayer   = new Player(name: 'Luca Bianchi', position: 'forward', birthYear: 2001, team: $thunderFC);
+    $requestBody = $maxi->dumpAuto([$newPlayer], [
+        'schemaFile'   => 'sports.mxs',
+        'includeTypes' => false,
     ]);
 
     $responseText = http_post("$BASE_URL/players", $requestBody);
-    $result       = Maxi::parse($responseText, ['loadSchema' => $loadSchema]);
-    [$createdId, $cName, $cPos, $cYear, $cTeam] = $result->records[0]->values;
+    $result       = $maxi->parse($responseText, ['loadSchema' => $loadSchema]);
+    $reg          = $result->objectRegistry ?? [];
+    [$createdId, $cName, $cPos, $cYear, $cTeamRef] = $result->records[0]->values;
+    $cTeamObj = resolve($cTeamRef, 'T', $reg);
+    $cTeam    = is_array($cTeamObj) ? $cTeamObj['name'] : $cTeamRef;
     echo "\n  ✓ Created: Player($createdId | $cName | $cPos | $cYear | $cTeam)\n";
 
     // ── 9. PUT /players/:id ────────────────────────────────────────────────────
     section("PUT /players/$createdId  (update just-created player via MAXI body)");
     {
-        $updated = ['id' => (int)$createdId, 'name' => $cName, 'position' => 'midfielder',
-                    'birthYear' => (int)$cYear, 'teamId' => (int)$cTeam];
-        $putBody = Maxi::dump([$updated], [
-            'schemaFile' => 'sports.mxs', 'defaultAlias' => 'P',
-            'includeTypes' => false, 'types' => [$T_PLAYER],
+        $updated = new Player(
+            id:        (int)$createdId,
+            name:      $cName,
+            position:  'midfielder',
+            birthYear: (int)$cYear,
+            team:      $thunderFC,
+        );
+        $putBody = $maxi->dumpAuto([$updated], [
+            'schemaFile'   => 'sports.mxs',
+            'includeTypes' => false,
         ]);
         $responseText = http_put("$BASE_URL/players/$createdId", $putBody);
-        $result       = Maxi::parse($responseText, ['loadSchema' => $loadSchema]);
+        $result       = $maxi->parse($responseText, ['loadSchema' => $loadSchema]);
+        $reg          = $result->objectRegistry ?? [];
         $v = $result->records[0]->values;
-        echo "\n  ✓ Updated: Player({$v[0]} | {$v[1]} | {$v[2]} | {$v[3]} | {$v[4]})\n";
+        $tObj = resolve($v[4], 'T', $reg);
+        $tName = is_array($tObj) ? $tObj['name'] : $v[4];
+        echo "\n  ✓ Updated: Player({$v[0]} | {$v[1]} | {$v[2]} | {$v[3]} | $tName)\n";
         echo "  ✓ position updated to: {$v[2]}\n";
     }
 

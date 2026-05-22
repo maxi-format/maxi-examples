@@ -1,14 +1,26 @@
 package io.maxi.examples.client;
 
 import io.maxi.api.Maxi;
-import io.maxi.core.*;
+import io.maxi.core.DumpOptions;
+import io.maxi.core.MaxiParseException;
+import io.maxi.core.MaxiParseResult;
+import io.maxi.core.MaxiRecord;
+import io.maxi.core.MaxiSchema;
+import io.maxi.core.MaxiTypeDef;
+import io.maxi.core.ParseOptions;
 
 import java.net.URI;
-import java.net.http.*;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
 import java.net.http.HttpRequest.BodyPublishers;
 import java.net.http.HttpResponse.BodyHandlers;
-import java.nio.file.*;
-import java.util.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Sports Statistics API CLI client — Java.
@@ -27,12 +39,11 @@ public class ClientApp {
     private static final String HR =
         "────────────────────────────────────────────────────────────";
 
+    private static final Maxi maxi = new Maxi();
+
     private static String baseUrl;
     private static String sharedDir;
     private static final HttpClient HTTP = HttpClient.newHttpClient();
-
-    // Player type def (for POST/PUT request bodies)
-    private static final MaxiTypeDef T_PLAYER = buildPlayerTypeDef();
 
     public static void main(String[] args) throws Exception {
         baseUrl   = System.getenv().getOrDefault("BASE_URL", "http://localhost:8055").stripTrailing();
@@ -49,18 +60,15 @@ public class ClientApp {
                 playerRows.add(List.of(s(v,0), s(v,1), s(v,2), s(v,3), s(v,4)));
             }
         }
-        printTable(List.of("id","name","position","birthYear","teamId"), playerRows);
+        printTable(List.of("id","name","position","birthYear","team"), playerRows);
 
         // ── 2. GET /teams ─────────────────────────────────────────────────
         section("GET /teams");
         text = httpGet("/teams");
-        res  = parse(text);
+        List<Team> fetchedTeams = maxi.parseAs(text, Team.class, parseOpts()).getAs("T", Team.class);
         List<List<String>> teamRows = new ArrayList<>();
-        for (MaxiRecord rec : res.getRecords()) {
-            if ("T".equals(rec.alias())) {
-                var v = rec.values();
-                teamRows.add(List.of(s(v,0), s(v,1), s(v,2), s(v,3), s(v,4)));
-            }
+        for (Team t : fetchedTeams) {
+            teamRows.add(List.of(String.valueOf(t.id), t.name, t.city, String.valueOf(t.founded), t.coach));
         }
         printTable(List.of("id","name","city","founded","coach"), teamRows);
 
@@ -81,11 +89,14 @@ public class ClientApp {
         text = httpGet("/games");
         res  = parse(text);
         List<List<String>> gameRows = new ArrayList<>();
+        var gameReg = buildRegistry(res);
         for (MaxiRecord rec : res.getRecords()) {
             if ("G".equals(rec.alias()) && rec.values().size() >= 7) {
                 var v = rec.values();
-                String score = s(v,5) + "–" + s(v,6);
-                gameRows.add(List.of(s(v,0), s(v,1), s(v,2), s(v,3), s(v,4), score));
+                String home  = strOrRef(v.get(1), "T", gameReg, "name");
+                String away  = strOrRef(v.get(2), "T", gameReg, "name");
+                String score = s(v,5) + "\u2013" + s(v,6);
+                gameRows.add(List.of(s(v,0), home, away, s(v,3), s(v,4), score));
             }
         }
         printTable(List.of("id","home","away","date","status","score"), gameRows);
@@ -94,12 +105,15 @@ public class ClientApp {
         section("GET /games/1  (GameDetail with nested S[] arrays)");
         text = httpGet("/games/1");
         res  = parse(text);
+        var gameDetailReg = buildRegistry(res);
         for (MaxiRecord rec : res.getRecords()) {
             if ("D".equals(rec.alias()) && rec.values().size() >= 3) {
                 var v = rec.values();
                 System.out.printf("  GameDetail for game %s:%n", s(v,0));
-                System.out.printf("  Home: %s%n", s(v,1));
-                System.out.printf("  Away: %s%n", s(v,2));
+                System.out.println("  Home:");
+                printTable(List.of("name","goals","assists","minutes"), toStatRows(v.get(1), gameDetailReg));
+                System.out.println("  Away:");
+                printTable(List.of("name","goals","assists","minutes"), toStatRows(v.get(2), gameDetailReg));
             }
         }
 
@@ -145,57 +159,60 @@ public class ClientApp {
 
         // ── 8. POST /players ──────────────────────────────────────────────
         section("POST /players  (MAXI request body → MAXI response)");
-        Map<String, Object> newPlayer = new LinkedHashMap<>();
-        newPlayer.put("id",        0);
-        newPlayer.put("name",      "Luca Bianchi");
-        newPlayer.put("position",  "forward");
-        newPlayer.put("birthYear", 2001);
-        newPlayer.put("teamId",    1);
-        String reqBody = Maxi.dumpFromMaps(
-            Map.of("P", List.of(newPlayer)),
-            List.of(T_PLAYER),
-            DumpOptions.defaults().setSchemaFile("sports.mxs").setIncludeTypes(false)
-        );
+        Team thunderFC  = fetchedTeams.isEmpty() ? new Team() : fetchedTeams.get(0);
+        Player newPlayer = new Player();
+        newPlayer.name      = "Luca Bianchi";
+        newPlayer.position  = "forward";
+        newPlayer.birthYear = 2001;
+        newPlayer.team      = thunderFC;
+        String reqBody = maxi.dumpAuto(List.of(newPlayer),
+            DumpOptions.defaults().setSchemaFile("sports.mxs").setIncludeTypes(false));
         String respText = httpPost("/players", reqBody);
-        res = parse(respText);
-        if (!res.getRecords().isEmpty()) {
-            var v = res.getRecords().get(0).values();
-            String createdId = s(v, 0);
-            System.out.printf("%n  ✓ Created: Player(%s | %s | %s | %s | %s)%n",
-                createdId, s(v,1), s(v,2), s(v,3), s(v,4));
+        MaxiParseResult postRes = parse(respText);
+        var postReg = buildRegistry(postRes);
+        MaxiRecord postRec = postRes.getRecords().stream()
+            .filter(r -> "P".equals(r.alias())).findFirst().orElse(null);
+        if (postRec != null) {
+            var v = postRec.values();
+            int createdId   = Integer.parseInt(s(v, 0));
+            String cName    = s(v, 1);
+            String cPos     = s(v, 2);
+            int cYear       = Integer.parseInt(s(v, 3).isEmpty() ? "0" : s(v, 3));
+            String cTeamStr = strOrRef(v.get(4), "T", postReg, "name");
+            System.out.printf("%n  ✓ Created: Player(%d | %s | %s | %d | %s)%n",
+                createdId, cName, cPos, cYear, cTeamStr);
 
             // ── 9. PUT /players/:id ───────────────────────────────────────
-            section(String.format("PUT /players/%s  (update just-created player)", createdId));
-            Map<String, Object> updated = new LinkedHashMap<>();
-            updated.put("id",        Integer.parseInt(createdId));
-            updated.put("name",      s(v,1));
-            updated.put("position",  "midfielder");
-            updated.put("birthYear", v.get(3));
-            updated.put("teamId",    v.get(4));
-            String putBody = Maxi.dumpFromMaps(
-                Map.of("P", List.of(updated)),
-                List.of(T_PLAYER),
-                DumpOptions.defaults().setSchemaFile("sports.mxs").setIncludeTypes(false)
-            );
+            section(String.format("PUT /players/%d  (update just-created player)", createdId));
+            Player updated = new Player();
+            updated.id        = createdId;
+            updated.name      = cName;
+            updated.position  = "midfielder";
+            updated.birthYear = cYear;
+            updated.team      = thunderFC;
+            String putBody = maxi.dumpAuto(List.of(updated),
+                DumpOptions.defaults().setSchemaFile("sports.mxs").setIncludeTypes(false));
             respText = httpPut("/players/" + createdId, putBody);
-            res = parse(respText);
-            if (!res.getRecords().isEmpty()) {
-                var vv = res.getRecords().get(0).values();
+            MaxiParseResult putRes = parse(respText);
+            var putReg = buildRegistry(putRes);
+            MaxiRecord putRec = putRes.getRecords().stream()
+                .filter(r -> "P".equals(r.alias())).findFirst().orElse(null);
+            if (putRec != null) {
+                var pv = putRec.values();
                 System.out.printf("%n  ✓ Updated: Player(%s | %s | %s | %s | %s)%n",
-                    s(vv,0), s(vv,1), s(vv,2), s(vv,3), s(vv,4));
-                System.out.printf("  ✓ position updated to: %s%n", s(vv,2));
+                    s(pv,0), s(pv,1), s(pv,2), s(pv,3),
+                    strOrRef(pv.get(4), "T", putReg, "name"));
+                System.out.printf("  ✓ position updated to: %s%n", s(pv, 2));
             }
 
             // ── 10. DELETE /players/:id ───────────────────────────────────
-            section(String.format("DELETE /players/%s  (clean up demo player)", createdId));
+            section(String.format("DELETE /players/%d  (clean up demo player)", createdId));
             httpDelete("/players/" + createdId);
             System.out.println("\n  ✓ Demo player removed — data is clean for the next run.");
         }
 
         System.out.printf("%n%s%n  All endpoints validated successfully.%n%s%n%n", HR, HR);
     }
-
-    // ── HTTP helpers ──────────────────────────────────────────────────────
 
     private static String httpGet(String path) throws Exception {
         System.out.printf("  → GET %s%s%n", baseUrl, path);
@@ -241,10 +258,8 @@ public class ClientApp {
         System.out.printf("  ← HTTP %d%n", resp.statusCode());
     }
 
-    // ── Parse helper ──────────────────────────────────────────────────────
-
-    private static MaxiParseResult parse(String text) throws MaxiParseException {
-        ParseOptions opts = ParseOptions.defaults()
+    private static ParseOptions parseOpts() {
+        return ParseOptions.defaults()
             .setSchemaLoader(name -> {
                 String safe = name.replaceAll("[^a-zA-Z0-9._-]", "");
                 try {
@@ -253,12 +268,12 @@ public class ClientApp {
                     throw new RuntimeException("Cannot load schema: " + name, e);
                 }
             });
-        return Maxi.parse(text, opts);
     }
 
-    // ── Object registry (for reference resolution) ────────────────────────
+    private static MaxiParseResult parse(String text) throws MaxiParseException {
+        return maxi.parse(text, parseOpts());
+    }
 
-    @SuppressWarnings("unchecked")
     private static Map<String, Map<String, Map<String, Object>>> buildRegistry(MaxiParseResult res) {
         // alias → id-string → object map
         Map<String, Map<String, Map<String, Object>>> reg = new HashMap<>();
@@ -358,6 +373,22 @@ public class ClientApp {
         } catch (NumberFormatException e) { return String.valueOf(v); }
     }
 
+    @SuppressWarnings("unchecked")
+    private static List<List<String>> toStatRows(Object arr,
+            Map<String, Map<String, Map<String, Object>>> reg) {
+        if (!(arr instanceof List<?> list)) return List.of();
+        var rows = new java.util.ArrayList<List<String>>();
+        for (var item : list) {
+            if (!(item instanceof Map<?, ?> raw)) continue;
+            var s = (Map<String, Object>) raw;
+            Map<String, Object> p = resolveRef(s.get("player"), "P", reg);
+            String name = p != null ? String.valueOf(p.get("name")) : "#" + s.get("player");
+            rows.add(List.of(name, anyStr(s.get("goals")),
+                    anyStr(s.get("assists")), anyStr(s.get("minutesPlayed"))));
+        }
+        return rows;
+    }
+
     // ── Schema dir ────────────────────────────────────────────────────────
 
     private static String resolveSharedDir() {
@@ -366,16 +397,4 @@ public class ClientApp {
         return "../shared";
     }
 
-    // ── Player type def for POST/PUT ──────────────────────────────────────
-
-    private static MaxiTypeDef buildPlayerTypeDef() {
-        MaxiTypeDef td = new MaxiTypeDef("P", "Player");
-        MaxiFieldDef id = new MaxiFieldDef("id"); id.setTypeExpr("int"); td.addField(id);
-        MaxiFieldDef name = new MaxiFieldDef("name"); td.addField(name);
-        MaxiFieldDef pos = new MaxiFieldDef("position");
-        pos.setTypeExpr("enum[forward,midfielder,defender,goalkeeper]"); td.addField(pos);
-        MaxiFieldDef by = new MaxiFieldDef("birthYear"); by.setTypeExpr("int"); td.addField(by);
-        MaxiFieldDef ti = new MaxiFieldDef("teamId"); ti.setTypeExpr("int"); td.addField(ti);
-        return td;
-    }
 }

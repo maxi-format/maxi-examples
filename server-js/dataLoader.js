@@ -76,7 +76,60 @@ export function loadGameStatsByGameId(gameId) {
 }
 
 // ---------------------------------------------------------------------------
+// Games with team join
+// ---------------------------------------------------------------------------
+
+export function loadGamesWithTeams() {
+  const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
+  return games
+    .filter(g => teamMap[g.homeTeamId] && teamMap[g.awayTeamId])
+    .map(({ homeTeamId, awayTeamId, ...rest }) => ({
+      ...rest, homeTeam: teamMap[homeTeamId], awayTeam: teamMap[awayTeamId],
+    }));
+}
+
+export function loadGameByIdWithTeams(id) {
+  const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
+  const g = games.find(g => g.id === id);
+  if (!g || !teamMap[g.homeTeamId] || !teamMap[g.awayTeamId]) return null;
+  const { homeTeamId, awayTeamId, ...rest } = g;
+  return { ...rest, homeTeam: teamMap[homeTeamId], awayTeam: teamMap[awayTeamId] };
+}
+
+export function loadGameStatsByGameIdWithPlayers(gameId) {
+  const stats = gameStats.find(s => s.gameId === gameId);
+  if (!stats) return null;
+  const playerMap = Object.fromEntries(loadPlayersWithTeams().map(p => [p.id, p]));
+  const enrich = arr =>
+    (arr ?? [])
+      .filter(s => playerMap[s.playerId])
+      .map(({ playerId, ...rest }) => ({ player: playerMap[playerId], ...rest }));
+  return { ...stats, homePlayers: enrich(stats.homePlayers), awayPlayers: enrich(stats.awayPlayers) };
+}
+
+// ---------------------------------------------------------------------------
 // Transfers — returns rows with nested player/team objects for dumpMaxi
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Players with team join — for GET /players, GET /players/:id
+// ---------------------------------------------------------------------------
+
+export function loadPlayersWithTeams() {
+  const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
+  return players
+    .filter(p => teamMap[p.teamId])
+    .map(({ teamId, ...rest }) => ({ ...rest, team: teamMap[teamId] }));
+}
+
+export function loadPlayerByIdWithTeam(id) {
+  const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
+  const p = players.find(p => p.id === id);
+  if (!p || !teamMap[p.teamId]) return null;
+  const { teamId, ...rest } = p;
+  return { ...rest, team: teamMap[teamId] };
+}
+
 // ---------------------------------------------------------------------------
 
 /**
@@ -93,11 +146,18 @@ export function loadTransfersWithRefs(filterPlayerId) {
     ? transfers.filter(t => t.playerId === filterPlayerId)
     : transfers;
 
+  // Keep player.team as an int ID — the full team is already in the pool
+  // via fromTeam/toTeam, so the reference pool won't have duplicates.
+  const enrichPlayer = p => {
+    const { teamId, ...rest } = p;
+    return { ...rest, team: teamId ?? null };
+  };
+
   return filtered
     .filter(t => playerMap[t.playerId] && teamMap[t.fromTeamId] && teamMap[t.toTeamId])
     .map(t => ({
       id:       t.id,
-      player:   playerMap[t.playerId],
+      player:   enrichPlayer(playerMap[t.playerId]),
       fromTeam: teamMap[t.fromTeamId],
       toTeam:   teamMap[t.toTeamId],
       date:     t.date,

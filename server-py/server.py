@@ -14,12 +14,19 @@ from flask import Flask, Response, abort, request, send_from_directory
 
 from maxi import dump_maxi, parse_maxi
 
+from model import Game, GameDetail, Player, PlayerStats, Team, Transfer
+
 from data_loader import (
     load_game_by_id,
+    load_game_by_id_with_teams,
     load_game_stats_by_game_id,
+    load_game_stats_by_game_id_with_players,
     load_games,
+    load_games_with_teams,
     load_player_by_id,
+    load_player_by_id_with_team,
     load_players,
+    load_players_with_teams,
     load_team_by_id,
     load_teams,
     load_transfers_with_refs,
@@ -30,74 +37,15 @@ SHARED = Path(__file__).parent.parent / "shared"
 PORT = int(os.environ.get("PORT", 5000))
 
 # ---------------------------------------------------------------------------
-# Type definitions (mirror sports.mxs — used by dump_maxi)
+# Type definitions — derived from annotated model classes in model.py
 # ---------------------------------------------------------------------------
 
-T_PLAYER = {
-    "alias": "P", "name": "Player",
-    "fields": [
-        {"name": "id",        "typeExpr": "int"},
-        {"name": "name",      "constraints": [{"type": "required"}]},
-        {"name": "position",  "typeExpr": "enum[forward,midfielder,defender,goalkeeper]"},
-        {"name": "birthYear", "typeExpr": "int"},
-        {"name": "teamId",    "typeExpr": "int"},
-    ],
-}
-
-T_TEAM = {
-    "alias": "T", "name": "Team",
-    "fields": [
-        {"name": "id",      "typeExpr": "int"},
-        {"name": "name",    "constraints": [{"type": "required"}]},
-        {"name": "city",    "constraints": [{"type": "required"}]},
-        {"name": "founded", "typeExpr": "int"},
-        {"name": "coach",   "constraints": [{"type": "required"}]},
-    ],
-}
-
-T_STATS = {
-    "alias": "S", "name": "PlayerStats",
-    "fields": [
-        {"name": "playerId",      "typeExpr": "int"},
-        {"name": "goals",         "typeExpr": "int", "defaultValue": 0},
-        {"name": "assists",       "typeExpr": "int", "defaultValue": 0},
-        {"name": "minutesPlayed", "typeExpr": "int", "defaultValue": 0},
-    ],
-}
-
-T_GAME = {
-    "alias": "G", "name": "Game",
-    "fields": [
-        {"name": "id",         "typeExpr": "int"},
-        {"name": "homeTeamId", "typeExpr": "int"},
-        {"name": "awayTeamId", "typeExpr": "int"},
-        {"name": "date",       "annotation": "date", "constraints": [{"type": "required"}]},
-        {"name": "status",     "typeExpr": "enum[scheduled,live,finished,cancelled]"},
-        {"name": "homeScore",  "typeExpr": "int", "defaultValue": 0},
-        {"name": "awayScore",  "typeExpr": "int", "defaultValue": 0},
-    ],
-}
-
-T_GAME_DETAIL = {
-    "alias": "D", "name": "GameDetail",
-    "fields": [
-        {"name": "gameId",      "typeExpr": "int"},
-        {"name": "homePlayers", "typeExpr": "S[]"},
-        {"name": "awayPlayers", "typeExpr": "S[]"},
-    ],
-}
-
-T_TRANSFER = {
-    "alias": "X", "name": "Transfer",
-    "fields": [
-        {"name": "id",       "typeExpr": "int"},
-        {"name": "player",   "typeExpr": "P"},
-        {"name": "fromTeam", "typeExpr": "T"},
-        {"name": "toTeam",   "typeExpr": "T"},
-        {"name": "date",     "annotation": "date", "constraints": [{"type": "required"}]},
-        {"name": "fee",      "typeExpr": "decimal"},
-    ],
-}
+T_PLAYER      = Player.__maxi_schema__
+T_TEAM        = Team.__maxi_schema__
+T_STATS       = PlayerStats.__maxi_schema__
+T_GAME        = Game.__maxi_schema__
+T_GAME_DETAIL = GameDetail.__maxi_schema__
+T_TRANSFER    = Transfer.__maxi_schema__
 
 # ---------------------------------------------------------------------------
 # Helper: build a MAXI response
@@ -166,15 +114,15 @@ def get_schema(name: str):
 
 @app.get("/players")
 def get_players():
-    return maxi_response(load_players(), "P", [T_PLAYER])
+    return maxi_response(load_players_with_teams(), "P", [T_PLAYER, T_TEAM])
 
 
 @app.get("/players/<int:player_id>")
 def get_player(player_id: int):
-    player = load_player_by_id(player_id)
+    player = load_player_by_id_with_team(player_id)
     if player is None:
         return maxi_not_found()
-    return maxi_response([player], "P", [T_PLAYER])
+    return maxi_response([player], "P", [T_PLAYER, T_TEAM])
 
 
 @app.post("/players")
@@ -192,7 +140,7 @@ def create_player():
         "teamId":    int(v[4]),
     }
     save_players([*players, player])
-    return maxi_response([player], "P", [T_PLAYER], status=201)
+    return maxi_response([load_player_by_id_with_team(new_id)], "P", [T_PLAYER, T_TEAM], status=201)
 
 
 @app.put("/players/<int:player_id>")
@@ -212,7 +160,7 @@ def update_player(player_id: int):
         "teamId":    int(v[4]),
     }
     save_players(players)
-    return maxi_response([players[idx]], "P", [T_PLAYER])
+    return maxi_response([load_player_by_id_with_team(player_id)], "P", [T_PLAYER, T_TEAM])
 
 
 @app.delete("/players/<int:player_id>")
@@ -252,7 +200,7 @@ def get_team(team_id: int):
     team = load_team_by_id(team_id)
     if team is None:
         return maxi_not_found()
-    roster = [p for p in load_players() if p["teamId"] == team["id"]]
+    roster = [p for p in load_players_with_teams() if (p.get("team") or {}).get("id") == team["id"]]
     return maxi_response({"T": [team], "P": roster}, "T", [T_TEAM, T_PLAYER])
 
 
@@ -262,20 +210,21 @@ def get_team(team_id: int):
 
 @app.get("/games")
 def get_games():
-    return maxi_response(load_games(), "G", [T_GAME])
+    return maxi_response(load_games_with_teams(), "G", [T_GAME, T_TEAM])
 
 
 @app.get("/games/<int:game_id>")
 def get_game(game_id: int):
-    game = load_game_by_id(game_id)
+    game = load_game_by_id_with_teams(game_id)
     if game is None:
         return maxi_not_found()
-    stats = load_game_stats_by_game_id(game_id)
+    stats = load_game_stats_by_game_id_with_players(game_id)
     if stats:
+        players = [s["player"] for s in stats.get("homePlayers", []) + stats.get("awayPlayers", [])]
         return maxi_response(
-            {"G": [game], "D": [stats]}, "G", [T_GAME, T_STATS, T_GAME_DETAIL]
+            {"G": [game], "D": [stats], "P": players}, "G", [T_GAME, T_TEAM, T_STATS, T_PLAYER, T_GAME_DETAIL]
         )
-    return maxi_response([game], "G", [T_GAME])
+    return maxi_response([game], "G", [T_GAME, T_TEAM])
 
 
 # ---------------------------------------------------------------------------

@@ -137,7 +137,7 @@ def resolve(value, alias: str, registry: dict):
         id_val = int(value)
     except (ValueError, TypeError):
         return value
-    return (registry.get(alias) or {}).get(id_val, value)
+    return (registry.get(alias) or {}).get(str(id_val), value)
 
 def transfer_str(values, registry: dict) -> str:
     tid, p_ref, f_ref, t_ref, date, fee = values
@@ -161,7 +161,7 @@ T_PLAYER = {
         {"name": "name",      "constraints": [{"type": "required"}]},
         {"name": "position",  "typeExpr": "enum[forward,midfielder,defender,goalkeeper]"},
         {"name": "birthYear", "typeExpr": "int"},
-        {"name": "teamId",    "typeExpr": "int"},
+        {"name": "team",      "typeExpr": "T"},
     ],
 }
 
@@ -171,8 +171,8 @@ async def main() -> None:
     section("GET /players  (raw parse_maxi → positional values)")
     text   = http_get("/players")
     result = await parse_maxi(text, load_schema=load_schema)
-    print_table(["id", "name", "position", "birthYear", "teamId"],
-                [r.values for r in result.records])
+    print_table(["id", "name", "position", "birthYear", "team"],
+                [r.values for r in result.records if r.alias == "P"])
 
     # ── 2. GET /teams ─────────────────────────────────────────────────────────
     section("GET /teams")
@@ -193,19 +193,38 @@ async def main() -> None:
     section("GET /games")
     text   = http_get("/games")
     result = await parse_maxi(text, load_schema=load_schema)
-    print_table(["id", "home", "away", "date", "status", "score"],
-                [[*r.values[:5], f"{r.values[5]}–{r.values[6]}"] for r in result.records])
+    reg    = getattr(result, "_object_registry", {}) or {}
+    rows   = []
+    for r in result.records:
+        if r.alias == "G" and len(r.values) >= 7:
+            ht = resolve(r.values[1], "T", reg)
+            at = resolve(r.values[2], "T", reg)
+            home_name = ht["name"] if isinstance(ht, dict) else str(r.values[1])
+            away_name = at["name"] if isinstance(at, dict) else str(r.values[2])
+            rows.append([r.values[0], home_name, away_name, r.values[3], r.values[4],
+                         f"{r.values[5]}\u2013{r.values[6]}"])
+    print_table(["id", "home", "away", "date", "status", "score"], rows)
 
     # ── 5. GET /games/1 — nested S[] arrays ───────────────────────────────────
     section("GET /games/1  (GameDetail with nested S[] arrays)")
     text   = http_get("/games/1")
     result = await parse_maxi(text, load_schema=load_schema)
+    reg    = getattr(result, "_object_registry", {}) or {}
+    def to_rows(arr):
+        rows = []
+        for s in (arr or []):
+            p = resolve(s.get("player"), "P", reg)
+            name = p["name"] if isinstance(p, dict) else f"#{s.get('player', '?')}"
+            rows.append([name, str(s.get("goals", 0)), str(s.get("assists", 0)), str(s.get("minutesPlayed", 0))])
+        return rows
     for rec in result.records:
         if rec.alias == "D":
             game_id, home, away = rec.values
             print(f"  GameDetail for game {game_id}:")
-            print(f"  Home: {home}")
-            print(f"  Away: {away}")
+            print("  Home:")
+            print_table(["name", "goals", "assists", "minutes"], to_rows(home))
+            print("  Away:")
+            print_table(["name", "goals", "assists", "minutes"], to_rows(away))
 
     # ── 6. GET /transfers — OBJECT REFERENCE RESOLUTION ──────────────────────
     section("GET /transfers  (object references → resolve via _object_registry)")
@@ -234,7 +253,7 @@ async def main() -> None:
 
     # ── 8. POST /players ──────────────────────────────────────────────────────
     section("POST /players  (MAXI request body → MAXI response)")
-    new_player   = {"id": 0, "name": "Luca Bianchi", "position": "forward", "birthYear": 2001, "teamId": 1}
+    new_player   = {"id": 0, "name": "Luca Bianchi", "position": "forward", "birthYear": 2001, "team": 1}
     request_body = dump_maxi([new_player], schema_file="sports.mxs",
                              default_alias="P", include_types=False, types=[T_PLAYER])
     response_text = http_post("/players", request_body)
@@ -245,7 +264,7 @@ async def main() -> None:
     # ── 9. PUT /players/:id ───────────────────────────────────────────────────
     section(f"PUT /players/{created_id}  (update just-created player via MAXI body)")
     updated  = {"id": int(created_id), "name": c_name, "position": "midfielder",
-                "birthYear": int(c_year), "teamId": int(c_team)}
+                "birthYear": int(c_year), "team": int(c_team)}
     put_body = dump_maxi([updated], schema_file="sports.mxs",
                          default_alias="P", include_types=False, types=[T_PLAYER])
     response_text = http_put(f"/players/{created_id}", put_body)

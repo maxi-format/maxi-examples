@@ -30,87 +30,16 @@ var (
 )
 
 // ---------------------------------------------------------------------------
-// Type definitions — mirror sports.mxs
+// Type definitions — derived from annotated model structs in models.go
 // ---------------------------------------------------------------------------
 
-func makeField(name string, extras ...string) *core.MaxiFieldDef {
-	f := &core.MaxiFieldDef{Name: name}
-	for i := 0; i+1 < len(extras); i += 2 {
-		switch extras[i] {
-		case "type":
-			f.TypeExpr = extras[i+1]
-		case "ann":
-			f.Annotation = extras[i+1]
-		case "default":
-			f.DefaultValue = extras[i+1]
-		case "required":
-			f.Constraints = append(f.Constraints, core.ParsedConstraint{Type: core.ConstraintRequired})
-		}
-	}
-	return f
-}
-
 var (
-	tPlayer = &core.MaxiTypeDef{
-		Alias: "P", Name: "Player",
-		Fields: []*core.MaxiFieldDef{
-			makeField("id", "type", "int"),
-			makeField("name", "required", "true"),
-			makeField("position", "type", "enum[forward,midfielder,defender,goalkeeper]"),
-			makeField("birthYear", "type", "int"),
-			makeField("teamId", "type", "int"),
-		},
-	}
-	tTeam = &core.MaxiTypeDef{
-		Alias: "T", Name: "Team",
-		Fields: []*core.MaxiFieldDef{
-			makeField("id", "type", "int"),
-			makeField("name", "required", "true"),
-			makeField("city", "required", "true"),
-			makeField("founded", "type", "int"),
-			makeField("coach", "required", "true"),
-		},
-	}
-	tStats = &core.MaxiTypeDef{
-		Alias: "S", Name: "PlayerStats",
-		Fields: []*core.MaxiFieldDef{
-			makeField("playerId", "type", "int"),
-			makeField("goals", "type", "int", "default", "0"),
-			makeField("assists", "type", "int", "default", "0"),
-			makeField("minutesPlayed", "type", "int", "default", "0"),
-		},
-	}
-	tGame = &core.MaxiTypeDef{
-		Alias: "G", Name: "Game",
-		Fields: []*core.MaxiFieldDef{
-			makeField("id", "type", "int"),
-			makeField("homeTeamId", "type", "int"),
-			makeField("awayTeamId", "type", "int"),
-			makeField("date", "ann", "date", "required", "true"),
-			makeField("status", "type", "enum[scheduled,live,finished,cancelled]"),
-			makeField("homeScore", "type", "int", "default", "0"),
-			makeField("awayScore", "type", "int", "default", "0"),
-		},
-	}
-	tGameDetail = &core.MaxiTypeDef{
-		Alias: "D", Name: "GameDetail",
-		Fields: []*core.MaxiFieldDef{
-			makeField("gameId", "type", "int"),
-			makeField("homePlayers", "type", "S[]"),
-			makeField("awayPlayers", "type", "S[]"),
-		},
-	}
-	tTransfer = &core.MaxiTypeDef{
-		Alias: "X", Name: "Transfer",
-		Fields: []*core.MaxiFieldDef{
-			makeField("id", "type", "int"),
-			makeField("player", "type", "P"),
-			makeField("fromTeam", "type", "T"),
-			makeField("toTeam", "type", "T"),
-			makeField("date", "ann", "date", "required", "true"),
-			makeField("fee", "type", "decimal"),
-		},
-	}
+	tPlayer     = core.GetMaxiSchema(SPlayer{})
+	tTeam       = core.GetMaxiSchema(STeam{})
+	tStats      = core.GetMaxiSchema(SPlayerStats{})
+	tGame       = core.GetMaxiSchema(SGame{})
+	tGameDetail = core.GetMaxiSchema(SGameDetail{})
+	tTransfer   = core.GetMaxiSchema(STransfer{})
 )
 
 // ---------------------------------------------------------------------------
@@ -242,7 +171,7 @@ func handleGetSchema(w http.ResponseWriter, r *http.Request) {
 // --- Players ---
 
 func handleGetPlayers(w http.ResponseWriter, r *http.Request) {
-	maxiResponse(w, LoadPlayers(), "P", []*core.MaxiTypeDef{tPlayer}, http.StatusOK)
+	maxiResponse(w, LoadPlayersWithTeams(), "P", []*core.MaxiTypeDef{tPlayer, tTeam}, http.StatusOK)
 }
 
 func handleGetPlayer(w http.ResponseWriter, r *http.Request) {
@@ -251,12 +180,12 @@ func handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
-	p, ok := LoadPlayerByID(id)
+	p, ok := LoadPlayerByIDWithTeam(id)
 	if !ok {
 		maxiNotFound(w)
 		return
 	}
-	maxiResponse(w, []Record{p}, "P", []*core.MaxiTypeDef{tPlayer}, http.StatusOK)
+	maxiResponse(w, []Record{p}, "P", []*core.MaxiTypeDef{tPlayer, tTeam}, http.StatusOK)
 }
 
 func handleCreatePlayer(w http.ResponseWriter, r *http.Request) {
@@ -281,7 +210,8 @@ func handleCreatePlayer(w http.ResponseWriter, r *http.Request) {
 		"teamId":    intFromAny(v, 4),
 	}
 	SavePlayers(append(existing, player))
-	maxiResponse(w, []Record{player}, "P", []*core.MaxiTypeDef{tPlayer}, http.StatusCreated)
+	joined, _ := LoadPlayerByIDWithTeam(newID)
+	maxiResponse(w, []Record{joined}, "P", []*core.MaxiTypeDef{tPlayer, tTeam}, http.StatusCreated)
 }
 
 func handleUpdatePlayer(w http.ResponseWriter, r *http.Request) {
@@ -316,7 +246,8 @@ func handleUpdatePlayer(w http.ResponseWriter, r *http.Request) {
 		"teamId":    intFromAny(v, 4),
 	}
 	SavePlayers(existing)
-	maxiResponse(w, []Record{existing[idx]}, "P", []*core.MaxiTypeDef{tPlayer}, http.StatusOK)
+	joined, _ := LoadPlayerByIDWithTeam(id)
+	maxiResponse(w, []Record{joined}, "P", []*core.MaxiTypeDef{tPlayer, tTeam}, http.StatusOK)
 }
 
 func handleDeletePlayer(w http.ResponseWriter, r *http.Request) {
@@ -373,8 +304,8 @@ func handleGetTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	roster := []Record{}
-	for _, p := range LoadPlayers() {
-		if intVal(p["teamId"]) == id {
+	for _, p := range LoadPlayersWithTeams() {
+		if t, ok := p["team"].(Record); ok && intVal(t["id"]) == id {
 			roster = append(roster, p)
 		}
 	}
@@ -389,7 +320,7 @@ func handleGetTeam(w http.ResponseWriter, r *http.Request) {
 // --- Games ---
 
 func handleGetGames(w http.ResponseWriter, r *http.Request) {
-	maxiResponse(w, LoadGames(), "G", []*core.MaxiTypeDef{tGame}, http.StatusOK)
+	maxiResponse(w, LoadGamesWithTeams(), "G", []*core.MaxiTypeDef{tGame, tTeam}, http.StatusOK)
 }
 
 func handleGetGame(w http.ResponseWriter, r *http.Request) {
@@ -398,22 +329,39 @@ func handleGetGame(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
-	game, ok := LoadGameByID(id)
+	game, ok := LoadGameByIDWithTeams(id)
 	if !ok {
 		maxiNotFound(w)
 		return
 	}
-	stats, hasStats := LoadGameStatsByGameID(id)
+	stats, hasStats := LoadGameStatsByGameIDWithPlayers(id)
 	if hasStats {
+		// Collect the unique player IDs referenced in the stats so we can
+		// include P records in the response pool for client-side resolution.
+		seen := map[int]bool{}
+		for _, arr := range []any{stats["homePlayers"], stats["awayPlayers"]} {
+			items, _ := arr.([]any)
+			for _, item := range items {
+				if m, ok := item.(map[string]any); ok {
+					seen[intVal(m["player"])] = true
+				}
+			}
+		}
+		var playerRecs []Record
+		for _, p := range LoadPlayersWithTeams() {
+			if seen[intVal(p["id"])] {
+				playerRecs = append(playerRecs, p)
+			}
+		}
 		maxiResponse(w,
-			map[string][]Record{"G": {game}, "D": {stats}},
+			map[string][]Record{"G": {game}, "D": {stats}, "P": playerRecs},
 			"G",
-			[]*core.MaxiTypeDef{tGame, tStats, tGameDetail},
+			[]*core.MaxiTypeDef{tGame, tTeam, tStats, tPlayer, tGameDetail},
 			http.StatusOK,
 		)
 		return
 	}
-	maxiResponse(w, []Record{game}, "G", []*core.MaxiTypeDef{tGame}, http.StatusOK)
+	maxiResponse(w, []Record{game}, "G", []*core.MaxiTypeDef{tGame, tTeam}, http.StatusOK)
 }
 
 // --- Transfers ---

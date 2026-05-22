@@ -10,6 +10,6 @@
   },
   "dependencies": {
     "express": "^5.1.0",
-    "@maxi-format/maxi": "^0.3.0"
+    "@maxi-format/maxi": "^0.4.0"
   }
 }

@@ -15,87 +15,21 @@ declare(strict_types=1);
 require_once __DIR__ . '/vendor/autoload.php';
 
 use App\DataLoader;
+use App\Model\Game;
+use App\Model\GameDetail;
+use App\Model\Player;
+use App\Model\PlayerStats;
+use App\Model\Team;
+use App\Model\Transfer;
 use Maxi\Maxi;
+use Maxi\Registry\MaxiSchemaRegistry;
 
 $SHARED   = realpath(__DIR__ . '/../shared');
 $DATA_DIR = $SHARED . '/data';
 $PORT     = (int)($_SERVER['SERVER_PORT'] ?? getenv('PORT') ?: 8080);
 
 $loader = new DataLoader($DATA_DIR);
-
-// ---------------------------------------------------------------------------
-// Type definitions (mirror sports.mxs — used by Maxi::dump)
-// ---------------------------------------------------------------------------
-
-$T_PLAYER = [
-    'alias' => 'P', 'name' => 'Player',
-    'fields' => [
-        ['name' => 'id',        'typeExpr' => 'int'],
-        ['name' => 'name',      'constraints' => [['type' => 'required']]],
-        ['name' => 'position',  'typeExpr' => 'enum[forward,midfielder,defender,goalkeeper]'],
-        ['name' => 'birthYear', 'typeExpr' => 'int'],
-        ['name' => 'teamId',    'typeExpr' => 'int'],
-    ],
-];
-
-$T_TEAM = [
-    'alias' => 'T', 'name' => 'Team',
-    'fields' => [
-        ['name' => 'id',      'typeExpr' => 'int'],
-        ['name' => 'name',    'constraints' => [['type' => 'required']]],
-        ['name' => 'city',    'constraints' => [['type' => 'required']]],
-        ['name' => 'founded', 'typeExpr' => 'int'],
-        ['name' => 'coach',   'constraints' => [['type' => 'required']]],
-    ],
-];
-
-$T_STATS = [
-    'alias' => 'S', 'name' => 'PlayerStats',
-    'fields' => [
-        ['name' => 'playerId',      'typeExpr' => 'int'],
-        ['name' => 'goals',         'typeExpr' => 'int', 'defaultValue' => 0],
-        ['name' => 'assists',       'typeExpr' => 'int', 'defaultValue' => 0],
-        ['name' => 'minutesPlayed', 'typeExpr' => 'int', 'defaultValue' => 0],
-    ],
-];
-
-$T_GAME = [
-    'alias' => 'G', 'name' => 'Game',
-    'fields' => [
-        ['name' => 'id',         'typeExpr' => 'int'],
-        ['name' => 'homeTeamId', 'typeExpr' => 'int'],
-        ['name' => 'awayTeamId', 'typeExpr' => 'int'],
-        ['name' => 'date',       'annotation' => 'date', 'constraints' => [['type' => 'required']]],
-        ['name' => 'status',     'typeExpr' => 'enum[scheduled,live,finished,cancelled]'],
-        ['name' => 'homeScore',  'typeExpr' => 'int', 'defaultValue' => 0],
-        ['name' => 'awayScore',  'typeExpr' => 'int', 'defaultValue' => 0],
-    ],
-];
-
-$T_GAME_DETAIL = [
-    'alias' => 'D', 'name' => 'GameDetail',
-    'fields' => [
-        ['name' => 'gameId',      'typeExpr' => 'int'],
-        ['name' => 'homePlayers', 'typeExpr' => 'S[]'],
-        ['name' => 'awayPlayers', 'typeExpr' => 'S[]'],
-    ],
-];
-
-$T_TRANSFER = [
-    'alias' => 'X', 'name' => 'Transfer',
-    'fields' => [
-        ['name' => 'id',       'typeExpr' => 'int'],
-        ['name' => 'player',   'typeExpr' => 'P'],
-        ['name' => 'fromTeam', 'typeExpr' => 'T'],
-        ['name' => 'toTeam',   'typeExpr' => 'T'],
-        ['name' => 'date',     'annotation' => 'date', 'constraints' => [['type' => 'required']]],
-        ['name' => 'fee',      'typeExpr' => 'decimal'],
-    ],
-];
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+$maxi   = new Maxi();
 
 function loadSchema(string $name): string
 {
@@ -104,9 +38,20 @@ function loadSchema(string $name): string
     return file_get_contents($SHARED . '/' . $safe);
 }
 
-function maxiResponse(mixed $data, string $alias, array $types, int $status = 200): void
+/**
+ * Serialise $data to MAXI and send the HTTP response.
+ *
+ * @param mixed              $data        Rows or alias-keyed map (passed to Maxi::dump).
+ * @param string             $alias       Default record alias.
+ * @param class-string[]     $typeClasses Model class names; their MAXI schemas are
+ *                                        resolved via MaxiSchemaRegistry::get().
+ * @param int                $status      HTTP status code.
+ */
+function maxiResponse(mixed $data, string $alias, array $typeClasses, int $status = 200): void
 {
-    $body = Maxi::dump($data, [
+    global $maxi;
+    $types = array_map(fn($c) => MaxiSchemaRegistry::get($c), $typeClasses);
+    $body  = $maxi->dump($data, [
         'schemaFile'        => 'sports.mxs',
         'defaultAlias'      => $alias,
         'types'             => $types,
@@ -123,10 +68,6 @@ function notFound(): void
     http_response_code(404);
     header('Content-Type: application/maxi');
 }
-
-// ---------------------------------------------------------------------------
-// CORS
-// ---------------------------------------------------------------------------
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Headers: Content-Type');
@@ -159,25 +100,22 @@ if ($method === 'GET' && preg_match('#^/schema/([a-zA-Z0-9._-]+)$#', $uri, $m)) 
 
 // GET /players
 if ($method === 'GET' && $uri === '/players') {
-    global $T_PLAYER;
-    maxiResponse($loader->loadPlayers(), 'P', [$T_PLAYER]);
+    maxiResponse($loader->loadPlayersWithTeams(), 'P', [Player::class, Team::class]);
     exit;
 }
 
 // GET /players/:id
 if ($method === 'GET' && preg_match('#^/players/(\d+)$#', $uri, $m)) {
-    global $T_PLAYER;
-    $player = $loader->loadPlayerById((int)$m[1]);
+    $player = $loader->loadPlayerByIdWithTeam((int)$m[1]);
     if ($player === null) { notFound(); exit; }
-    maxiResponse([$player], 'P', [$T_PLAYER]);
+    maxiResponse([$player], 'P', [Player::class, Team::class]);
     exit;
 }
 
 // POST /players
 if ($method === 'POST' && $uri === '/players') {
-    global $T_PLAYER;
     $body    = file_get_contents('php://input');
-    $parsed  = Maxi::parse($body, ['loadSchema' => 'loadSchema']);
+    $parsed  = $maxi->parse($body, ['loadSchema' => 'loadSchema']);
     $players = $loader->loadPlayers();
     $maxId   = array_reduce($players, fn($carry, $p) => max($carry, $p['id']), 0);
     $v       = $parsed->records[0]->values;
@@ -189,16 +127,15 @@ if ($method === 'POST' && $uri === '/players') {
         'teamId'    => (int)$v[4],
     ];
     $loader->savePlayers([...$players, $player]);
-    maxiResponse([$player], 'P', [$T_PLAYER], 201);
+    maxiResponse([$loader->loadPlayerByIdWithTeam($maxId + 1)], 'P', [Player::class, Team::class], 201);
     exit;
 }
 
 // PUT /players/:id
 if ($method === 'PUT' && preg_match('#^/players/(\d+)$#', $uri, $m)) {
-    global $T_PLAYER;
     $id      = (int)$m[1];
     $body    = file_get_contents('php://input');
-    $parsed  = Maxi::parse($body, ['loadSchema' => 'loadSchema']);
+    $parsed  = $maxi->parse($body, ['loadSchema' => 'loadSchema']);
     $players = $loader->loadPlayers();
     $idx     = null;
     foreach ($players as $i => $p) {
@@ -214,7 +151,7 @@ if ($method === 'PUT' && preg_match('#^/players/(\d+)$#', $uri, $m)) {
         'teamId'    => (int)$v[4],
     ];
     $loader->savePlayers($players);
-    maxiResponse([$players[$idx]], 'P', [$T_PLAYER]);
+    maxiResponse([$loader->loadPlayerByIdWithTeam($id)], 'P', [Player::class, Team::class]);
     exit;
 }
 
@@ -235,56 +172,55 @@ if ($method === 'DELETE' && preg_match('#^/players/(\d+)$#', $uri, $m)) {
 
 // GET /players/:id/transfers
 if ($method === 'GET' && preg_match('#^/players/(\d+)/transfers$#', $uri, $m)) {
-    global $T_PLAYER, $T_TEAM, $T_TRANSFER;
     $rows = $loader->loadTransfersWithRefs((int)$m[1]);
     if (empty($rows)) { notFound(); exit; }
-    maxiResponse($rows, 'X', [$T_PLAYER, $T_TEAM, $T_TRANSFER]);
+    maxiResponse($rows, 'X', [Player::class, Team::class, Transfer::class]);
     exit;
 }
 
 // GET /teams
 if ($method === 'GET' && $uri === '/teams') {
-    global $T_TEAM;
-    maxiResponse($loader->loadTeams(), 'T', [$T_TEAM]);
+    maxiResponse($loader->loadTeams(), 'T', [Team::class]);
     exit;
 }
 
 // GET /teams/:id
 if ($method === 'GET' && preg_match('#^/teams/(\d+)$#', $uri, $m)) {
-    global $T_TEAM, $T_PLAYER;
     $team = $loader->loadTeamById((int)$m[1]);
     if ($team === null) { notFound(); exit; }
-    $roster = array_values(array_filter($loader->loadPlayers(), fn($p) => $p['teamId'] === $team['id']));
-    maxiResponse(['T' => [$team], 'P' => $roster], 'T', [$T_TEAM, $T_PLAYER]);
+    $roster = array_values(array_filter($loader->loadPlayersWithTeams(), fn($p) => ($p['team']['id'] ?? null) === $team['id']));
+    maxiResponse(['T' => [$team], 'P' => $roster], 'T', [Team::class, Player::class]);
     exit;
 }
 
 // GET /games
 if ($method === 'GET' && $uri === '/games') {
-    global $T_GAME;
-    maxiResponse($loader->loadGames(), 'G', [$T_GAME]);
+    maxiResponse($loader->loadGamesWithTeams(), 'G', [Game::class, Team::class]);
     exit;
 }
 
 // GET /games/:id
 if ($method === 'GET' && preg_match('#^/games/(\d+)$#', $uri, $m)) {
-    global $T_GAME, $T_STATS, $T_GAME_DETAIL;
-    $game = $loader->loadGameById((int)$m[1]);
+    $game = $loader->loadGameByIdWithTeams((int)$m[1]);
     if ($game === null) { notFound(); exit; }
-    $stats = $loader->loadGameStatsByGameId((int)$m[1]);
+    $stats = $loader->loadGameStatsByGameIdWithPlayers((int)$m[1]);
     if ($stats !== null) {
-        maxiResponse(['G' => [$game], 'D' => [$stats]], 'G', [$T_GAME, $T_STATS, $T_GAME_DETAIL]);
+        $players = array_values(array_map(
+            fn($s) => $s['player'],
+            array_merge($stats['homePlayers'] ?? [], $stats['awayPlayers'] ?? [])
+        ));
+        maxiResponse(['G' => [$game], 'D' => [$stats], 'P' => $players], 'G',
+            [Game::class, Team::class, PlayerStats::class, Player::class, GameDetail::class]);
     } else {
-        maxiResponse([$game], 'G', [$T_GAME]);
+        maxiResponse([$game], 'G', [Game::class, Team::class]);
     }
     exit;
 }
 
 // GET /transfers
 if ($method === 'GET' && $uri === '/transfers') {
-    global $T_PLAYER, $T_TEAM, $T_TRANSFER;
     $rows = $loader->loadTransfersWithRefs();
-    maxiResponse($rows, 'X', [$T_PLAYER, $T_TEAM, $T_TRANSFER]);
+    maxiResponse($rows, 'X', [Player::class, Team::class, Transfer::class]);
     exit;
 }
 

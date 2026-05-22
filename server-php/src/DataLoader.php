@@ -80,6 +80,40 @@ class DataLoader
     }
 
     // -------------------------------------------------------------------------
+    // Players with team join
+    // -------------------------------------------------------------------------
+
+    public function loadPlayersWithTeams(): array
+    {
+        $teams = [];
+        foreach ($this->loadTeams() as $t) { $teams[$t['id']] = $t; }
+        $result = [];
+        foreach ($this->loadPlayers() as $p) {
+            $teamId = $p['teamId'];
+            if (!isset($teams[$teamId])) continue;
+            $player = array_diff_key($p, ['teamId' => true]);
+            $player['team'] = $teams[$teamId];
+            $result[] = $player;
+        }
+        return $result;
+    }
+
+    public function loadPlayerByIdWithTeam(int $id): ?array
+    {
+        $teams = [];
+        foreach ($this->loadTeams() as $t) { $teams[$t['id']] = $t; }
+        foreach ($this->loadPlayers() as $p) {
+            if ($p['id'] !== $id) continue;
+            $teamId = $p['teamId'];
+            if (!isset($teams[$teamId])) return null;
+            $player = array_diff_key($p, ['teamId' => true]);
+            $player['team'] = $teams[$teamId];
+            return $player;
+        }
+        return null;
+    }
+
+    // -------------------------------------------------------------------------
     // Teams
     // -------------------------------------------------------------------------
 
@@ -144,13 +178,79 @@ class DataLoader
                    && isset($teams[$t['toTeamId']])
         ));
 
+        // Keep player.team as an int ID — the full team is already in the pool
+        // via fromTeam/toTeam, so the reference pool won't have duplicates.
         return array_map(fn($t) => [
             'id'       => $t['id'],
-            'player'   => $players[$t['playerId']],
+            'player'   => array_merge(
+                array_diff_key($players[$t['playerId']], ['teamId' => true]),
+                ['team' => $players[$t['playerId']]['teamId']]
+            ),
             'fromTeam' => $teams[$t['fromTeamId']],
             'toTeam'   => $teams[$t['toTeamId']],
             'date'     => $t['date'],
             'fee'      => $t['fee'] ?? null,
         ], $raw);
+    }
+
+    // -------------------------------------------------------------------------
+    // Games with team join
+    // -------------------------------------------------------------------------
+
+    public function loadGamesWithTeams(): array
+    {
+        $teams = [];
+        foreach ($this->loadTeams() as $t) { $teams[$t['id']] = $t; }
+        $result = [];
+        foreach ($this->loadGames() as $g) {
+            $ht = $teams[$g['homeTeamId']] ?? null;
+            $at = $teams[$g['awayTeamId']] ?? null;
+            if (!$ht || !$at) continue;
+            $game = array_diff_key($g, ['homeTeamId' => true, 'awayTeamId' => true]);
+            $game['homeTeam'] = $ht;
+            $game['awayTeam'] = $at;
+            $result[] = $game;
+        }
+        return $result;
+    }
+
+    public function loadGameByIdWithTeams(int $id): ?array
+    {
+        $teams = [];
+        foreach ($this->loadTeams() as $t) { $teams[$t['id']] = $t; }
+        foreach ($this->loadGames() as $g) {
+            if ($g['id'] !== $id) continue;
+            $ht = $teams[$g['homeTeamId']] ?? null;
+            $at = $teams[$g['awayTeamId']] ?? null;
+            if (!$ht || !$at) return null;
+            $game = array_diff_key($g, ['homeTeamId' => true, 'awayTeamId' => true]);
+            $game['homeTeam'] = $ht;
+            $game['awayTeam'] = $at;
+            return $game;
+        }
+        return null;
+    }
+
+    public function loadGameStatsByGameIdWithPlayers(int $gameId): ?array
+    {
+        $stats = $this->loadGameStatsByGameId($gameId);
+        if ($stats === null) return null;
+        $playerMap = [];
+        foreach ($this->loadPlayersWithTeams() as $p) { $playerMap[$p['id']] = $p; }
+        $enrich = function (array $arr) use ($playerMap): array {
+            $out = [];
+            foreach ($arr as $s) {
+                if (!isset($playerMap[$s['playerId']])) continue;
+                $stat = array_diff_key($s, ['playerId' => true]);
+                $stat['player'] = $playerMap[$s['playerId']];
+                $out[] = $stat;
+            }
+            return $out;
+        };
+        return array_merge(
+            array_diff_key($stats, ['homePlayers' => true, 'awayPlayers' => true]),
+            ['homePlayers' => $enrich($stats['homePlayers'] ?? [])],
+            ['awayPlayers' => $enrich($stats['awayPlayers'] ?? [])],
+        );
     }
 }

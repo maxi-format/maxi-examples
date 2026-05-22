@@ -284,9 +284,9 @@ function buildGames({ parsed, raw, url, status, meta }) {
   const rows = parsed.records
     .filter(r => r.alias === 'G')
     .map(r => {
-      const [id, home, away, date, st, hs, as_] = r.values;
+      const [id, homeTeam, awayTeam, date, st, hs, as_] = r.values;
       return [
-        esc(id), esc(home), esc(away), esc(date),
+        esc(id), esc(homeTeam?.name ?? homeTeam), esc(awayTeam?.name ?? awayTeam), esc(date),
         pill(st, STATUS_MAP),
         `<span class="score">${esc(hs)} – ${esc(as_)}</span>`,
       ];
@@ -335,7 +335,7 @@ const T_PLAYER_DEF = {
     { name: 'name',      constraints: [{ type: 'required' }] },
     { name: 'position',  typeExpr: 'enum[forward,midfielder,defender,goalkeeper]' },
     { name: 'birthYear', typeExpr: 'int' },
-    { name: 'teamId',    typeExpr: 'int' },
+    { name: 'team',      typeExpr: 'T' },
   ],
 };
 
@@ -381,13 +381,15 @@ async function deletePlayer(id) {
 function buildPlayers({ parsed, raw, url, status, meta }) {
   const records = parsed.records.filter(r => r.alias === 'P');
   const tbodyRows = records.map(r => {
-    const [id, name, pos, year, teamId] = r.values;
+    const [id, name, pos, year, team] = r.values;
+    const teamName = team?.name ?? String(team ?? '');
+    const teamId   = team?.id   ?? team;
     return `<tr data-player-id="${id}">
       <td>${esc(String(id))}</td>
       <td>${esc(name)}</td>
       <td>${pill(pos, POSITION_MAP)}</td>
       <td>${esc(String(year))}</td>
-      <td>${esc(String(teamId))}</td>
+      <td>${esc(teamName)}</td>
       <td><button class="btn-edit" data-action="edit-open"
           data-id="${id}" data-name="${esc(name)}" data-position="${esc(pos)}"
           data-birth-year="${esc(String(year))}" data-team-id="${esc(String(teamId))}">Edit</button>
@@ -410,7 +412,7 @@ function buildPlayers({ parsed, raw, url, status, meta }) {
       <div class="card-body">
         <table id="players-table">
           <thead><tr>
-            <th>ID</th><th>Name</th><th>Position</th><th>Birth Year</th><th>Team ID</th><th></th>
+            <th>ID</th><th>Name</th><th>Position</th><th>Birth Year</th><th>Team</th><th></th>
           </tr></thead>
           <tbody id="players-tbody">
             ${tbodyRows}
@@ -629,7 +631,7 @@ function collectFormData(formRow) {
     name:      get('name'),
     position:  get('position'),
     birthYear: Number(get('birthYear')) || 0,
-    teamId:    Number(get('teamId'))    || 0,
+    team:      Number(get('teamId'))    || 0,
   };
 }
 
@@ -645,14 +647,16 @@ function updatePreview(formRow) {
 }
 
 function appendPlayerRow(vals) {
-  const [id, name, pos, year, teamId] = vals;
+  const [id, name, pos, year, team] = vals;
+  const teamName = team?.name ?? String(team ?? '');
+  const teamId   = team?.id   ?? team;
   const tbody = document.getElementById('players-tbody');
   tbody.insertAdjacentHTML('beforeend', `<tr data-player-id="${id}">
     <td>${esc(String(id))}</td>
     <td>${esc(name)}</td>
     <td>${pill(pos, POSITION_MAP)}</td>
     <td>${esc(String(year))}</td>
-    <td>${esc(String(teamId))}</td>
+    <td>${esc(teamName)}</td>
     <td><button class="btn-edit" data-action="edit-open"
         data-id="${id}" data-name="${esc(name)}" data-position="${esc(pos)}"
         data-birth-year="${esc(String(year))}" data-team-id="${esc(String(teamId))}">Edit</button>
@@ -662,19 +666,21 @@ function appendPlayerRow(vals) {
 }
 
 function refreshPlayerRow(id, vals) {
-  const [, name, pos, year, teamId] = vals;
+  const [, name, pos, year, team] = vals;
+  const teamName = team?.name ?? String(team ?? '');
+  const teamId   = team?.id   ?? team;
   const row = document.querySelector(`tr[data-player-id="${id}"]`);
   if (!row) return;
   row.cells[1].textContent = name;
   row.cells[2].innerHTML   = pill(pos, POSITION_MAP);
   row.cells[3].textContent = year;
-  row.cells[4].textContent = teamId;
+  row.cells[4].textContent = teamName;
   const editBtn = row.cells[5].querySelector('button');
   if (editBtn) {
     editBtn.dataset.name      = name;
     editBtn.dataset.position  = pos;
     editBtn.dataset.birthYear = year;
-    editBtn.dataset.teamId    = teamId;
+    editBtn.dataset.teamId    = String(teamId);
   }
 }
 

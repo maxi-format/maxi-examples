@@ -5,13 +5,13 @@ services:
       context: .
       dockerfile: server-js/Dockerfile
     ports:
-      - "8060:4000"
+      - "8060:8060"
     environment:
-      PORT: "4000"
+      PORT: "8060"
     networks:
       - maxi-net
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:4000/players"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8060/players"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -21,13 +21,13 @@ services:
       context: .
       dockerfile: server-py/Dockerfile
     ports:
-      - "8070:5000"
+      - "8070:8070"
     environment:
-      PORT: "5000"
+      PORT: "8070"
     networks:
       - maxi-net
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/players')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8070/players')"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -43,7 +43,7 @@ services:
     networks:
       - maxi-net
     healthcheck:
-      test: ["CMD", "php", "-r", "file_get_contents('http://localhost:8080/players') or exit(1);"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/players"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -94,7 +94,7 @@ services:
       context: .
       dockerfile: client-js/Dockerfile.cli
     environment:
-      BASE_URL: "http://server-js:4000"
+      BASE_URL: "http://server-js:8060"
     depends_on:
       server-js:
         condition: service_healthy
@@ -107,7 +107,7 @@ services:
       context: .
       dockerfile: client-py/Dockerfile
     environment:
-      BASE_URL: "http://server-py:5000"
+      BASE_URL: "http://server-py:8070"
     depends_on:
       server-py:
         condition: service_healthy

@@ -8,7 +8,11 @@ import jakarta.enterprise.context.ApplicationScoped;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -96,7 +100,52 @@ public class DataLoader {
         return players.stream().filter(p -> intOf(p.get("teamId")) == teamId).toList();
     }
 
-    // ── Teams ─────────────────────────────────────────────────────────────
+    public List<Map<String, Object>> getPlayersWithTeams() {
+        Map<Integer, Map<String, Object>> teamMap = new HashMap<>();
+        for (Map<String, Object> t : teams) teamMap.put(intOf(t.get("id")), t);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> p : players) {
+            Map<String, Object> team = teamMap.get(intOf(p.get("teamId")));
+            if (team == null) continue;
+            Map<String, Object> row = new LinkedHashMap<>(p);
+            row.remove("teamId");
+            row.put("team", team);
+            out.add(row);
+        }
+        return out;
+    }
+
+    public Map<String, Object> findPlayerWithTeam(int id) {
+        Map<Integer, Map<String, Object>> teamMap = new HashMap<>();
+        for (Map<String, Object> t : teams) teamMap.put(intOf(t.get("id")), t);
+        for (Map<String, Object> p : players) {
+            if (intOf(p.get("id")) == id) {
+                Map<String, Object> team = teamMap.get(intOf(p.get("teamId")));
+                if (team == null) return null;
+                Map<String, Object> row = new LinkedHashMap<>(p);
+                row.remove("teamId");
+                row.put("team", team);
+                return row;
+            }
+        }
+        return null;
+    }
+
+    public List<Map<String, Object>> getPlayersForTeamWithTeam(int teamId) {
+        Map<Integer, Map<String, Object>> teamMap = new HashMap<>();
+        for (Map<String, Object> t : teams) teamMap.put(intOf(t.get("id")), t);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> p : players) {
+            if (intOf(p.get("teamId")) != teamId) continue;
+            Map<String, Object> team = teamMap.get(teamId);
+            if (team == null) continue;
+            Map<String, Object> row = new LinkedHashMap<>(p);
+            row.remove("teamId");
+            row.put("team", team);
+            out.add(row);
+        }
+        return out;
+    }
 
     public List<Map<String, Object>> getTeams() {
         return List.copyOf(teams);
@@ -105,8 +154,6 @@ public class DataLoader {
     public Map<String, Object> findTeam(int id) {
         return teams.stream().filter(t -> intOf(t.get("id")) == id).findFirst().orElse(null);
     }
-
-    // ── Games ─────────────────────────────────────────────────────────────
 
     public List<Map<String, Object>> getGames() {
         return List.copyOf(games);
@@ -119,8 +166,6 @@ public class DataLoader {
     public Map<String, Object> findGameStats(int gameId) {
         return gameStats.stream().filter(s -> intOf(s.get("gameId")) == gameId).findFirst().orElse(null);
     }
-
-    // ── Transfers ─────────────────────────────────────────────────────────
 
     /**
      * Returns transfers with full player and team objects inlined.
@@ -144,8 +189,13 @@ public class DataLoader {
             if (p == null || ft == null || tt == null) continue;
 
             Map<String, Object> row = new LinkedHashMap<>();
+            // Keep player.team as an int ID — the full team is already in the pool
+            // via fromTeam/toTeam, so the reference pool won't have duplicates.
+            Map<String, Object> pRow = new LinkedHashMap<>(p);
+            pRow.remove("teamId");
+            pRow.put("team", p.get("teamId"));
             row.put("id",       t.get("id"));
-            row.put("player",   p);
+            row.put("player",   pRow);
             row.put("fromTeam", ft);
             row.put("toTeam",   tt);
             row.put("date",     t.get("date"));
@@ -155,7 +205,80 @@ public class DataLoader {
         return out;
     }
 
-    // ── Helper ────────────────────────────────────────────────────────────
+    private static Map<String, Object> enrichPlayer(Map<String, Object> p,
+            Map<Integer, Map<String, Object>> teamMap) {
+        Map<String, Object> row = new LinkedHashMap<>(p);
+        row.remove("teamId");
+        row.put("team", teamMap.getOrDefault(intOf(p.get("teamId")), null));
+        return row;
+    }
+
+    public List<Map<String, Object>> getGamesWithTeams() {
+        Map<Integer, Map<String, Object>> teamMap = new HashMap<>();
+        for (Map<String, Object> t : teams) teamMap.put(intOf(t.get("id")), t);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> g : games) {
+            Map<String, Object> ht = teamMap.get(intOf(g.get("homeTeamId")));
+            Map<String, Object> at = teamMap.get(intOf(g.get("awayTeamId")));
+            if (ht == null || at == null) continue;
+            Map<String, Object> row = new LinkedHashMap<>(g);
+            row.remove("homeTeamId");
+            row.remove("awayTeamId");
+            row.put("homeTeam", ht);
+            row.put("awayTeam", at);
+            out.add(row);
+        }
+        return out;
+    }
+
+    public Map<String, Object> findGameWithTeams(int id) {
+        Map<Integer, Map<String, Object>> teamMap = new HashMap<>();
+        for (Map<String, Object> t : teams) teamMap.put(intOf(t.get("id")), t);
+        for (Map<String, Object> g : games) {
+            if (intOf(g.get("id")) != id) continue;
+            Map<String, Object> ht = teamMap.get(intOf(g.get("homeTeamId")));
+            Map<String, Object> at = teamMap.get(intOf(g.get("awayTeamId")));
+            if (ht == null || at == null) return null;
+            Map<String, Object> row = new LinkedHashMap<>(g);
+            row.remove("homeTeamId");
+            row.remove("awayTeamId");
+            row.put("homeTeam", ht);
+            row.put("awayTeam", at);
+            return row;
+        }
+        return null;
+    }
+
+    public Map<String, Object> findGameStatsWithPlayers(int gameId) {
+        Map<String, Object> stats = findGameStats(gameId);
+        if (stats == null) return null;
+        Map<Integer, Map<String, Object>> teamMap = new HashMap<>();
+        for (Map<String, Object> t : teams) teamMap.put(intOf(t.get("id")), t);
+        Map<Integer, Map<String, Object>> playerMap = new HashMap<>();
+        for (Map<String, Object> p : players) {
+            playerMap.put(intOf(p.get("id")), enrichPlayer(p, teamMap));
+        }
+        Map<String, Object> result = new LinkedHashMap<>(stats);
+        result.put("homePlayers", enrichStatsList(stats.get("homePlayers"), playerMap));
+        result.put("awayPlayers", enrichStatsList(stats.get("awayPlayers"), playerMap));
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Object> enrichStatsList(Object arr, Map<Integer, Map<String, Object>> playerMap) {
+        if (!(arr instanceof List<?> list)) return List.of();
+        List<Object> out = new ArrayList<>();
+        for (Object item : list) {
+            Map<String, Object> s = (Map<String, Object>) item;
+            Map<String, Object> p = playerMap.get(intOf(s.get("playerId")));
+            if (p == null) continue;
+            Map<String, Object> row = new LinkedHashMap<>(s);
+            row.remove("playerId");
+            row.put("player", p);
+            out.add(row);
+        }
+        return out;
+    }
 
     static int intOf(Object v) {
         if (v instanceof Number n) return n.intValue();

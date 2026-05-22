@@ -251,7 +251,7 @@ var tPlayer = &core.MaxiTypeDef{
 		{Name: "name"},
 		{Name: "position", TypeExpr: "enum[forward,midfielder,defender,goalkeeper]"},
 		{Name: "birthYear", TypeExpr: "int"},
-		{Name: "teamId", TypeExpr: "int"},
+		{Name: "team", TypeExpr: "T"},
 	},
 }
 
@@ -288,7 +288,7 @@ func main() {
 			})
 		}
 	}
-	printTable([]string{"id", "name", "position", "birthYear", "teamId"}, playerRows)
+	printTable([]string{"id", "name", "position", "birthYear", "team"}, playerRows)
 
 	// ── 2. GET /teams ────────────────────────────────────────────────────────
 	section("GET /teams")
@@ -336,11 +336,14 @@ func main() {
 		log.Fatalf("parse /games: %v", err)
 	}
 	var gameRows [][]string
+	gameReg := getRegistry(res)
 	for _, rec := range res.Records {
 		if rec.Alias == "G" && len(rec.Values) >= 7 {
-			score := fmt.Sprintf("%v–%v", rec.Values[5], rec.Values[6])
+			home := strOrRef(rec.Values[1], "T", gameReg, "name")
+			away := strOrRef(rec.Values[2], "T", gameReg, "name")
+			score := fmt.Sprintf("%v\u2013%v", rec.Values[5], rec.Values[6])
 			gameRows = append(gameRows, []string{
-				anyStr(rec.Values[0]), anyStr(rec.Values[1]), anyStr(rec.Values[2]),
+				anyStr(rec.Values[0]), home, away,
 				anyStr(rec.Values[3]), anyStr(rec.Values[4]), score,
 			})
 		}
@@ -354,11 +357,48 @@ func main() {
 	if err != nil {
 		log.Fatalf("parse /games/1: %v", err)
 	}
+	gameReg = getRegistry(res)
+	sByPlayer := map[string]map[string]any{}
+	for _, rec := range res.Records {
+		if rec.Alias == "S" && len(rec.Values) >= 4 {
+			pid := fmt.Sprintf("%v", rec.Values[0])
+			sByPlayer[pid] = map[string]any{
+				"player":        rec.Values[0],
+				"goals":         rec.Values[1],
+				"assists":       rec.Values[2],
+				"minutesPlayed": rec.Values[3],
+			}
+		}
+	}
+	toStatRows := func(arr any) [][]string {
+		items, _ := arr.([]any)
+		rows := make([][]string, 0, len(items))
+		for _, item := range items {
+			m, ok := item.(map[string]any)
+			if !ok {
+				m = sByPlayer[fmt.Sprintf("%v", item)]
+				if m == nil {
+					continue
+				}
+			}
+			p := resolveRef(m["player"], "P", gameReg)
+			name := anyStr(m["player"])
+			if p != nil {
+				if n, ok := p["name"].(string); ok {
+					name = n
+				}
+			}
+			rows = append(rows, []string{name, anyStr(m["goals"]), anyStr(m["assists"]), anyStr(m["minutesPlayed"])})
+		}
+		return rows
+	}
 	for _, rec := range res.Records {
 		if rec.Alias == "D" && len(rec.Values) >= 3 {
 			fmt.Printf("  GameDetail for game %v:\n", rec.Values[0])
-			fmt.Printf("  Home: %v\n", rec.Values[1])
-			fmt.Printf("  Away: %v\n", rec.Values[2])
+			fmt.Println("  Home:")
+			printTable([]string{"name", "goals", "assists", "minutes"}, toStatRows(rec.Values[1]))
+			fmt.Println("  Away:")
+			printTable([]string{"name", "goals", "assists", "minutes"}, toStatRows(rec.Values[2]))
 		}
 	}
 
@@ -416,7 +456,7 @@ func main() {
 	section("POST /players  (MAXI request body → MAXI response)")
 	newPlayer := map[string]any{
 		"id": 0, "name": "Luca Bianchi", "position": "forward",
-		"birthYear": 2001, "teamId": 1,
+		"birthYear": 2001, "team": 1,
 	}
 	requestBody, err := api.DumpMaxi([]map[string]any{newPlayer}, api.DumpOptions{
 		SchemaFile:        "sports.mxs",
@@ -443,7 +483,7 @@ func main() {
 	cID, _ := strconv.Atoi(createdID)
 	updated := map[string]any{
 		"id": cID, "name": anyStr(v[1]), "position": "midfielder",
-		"birthYear": v[3], "teamId": v[4],
+		"birthYear": v[3], "team": v[4],
 	}
 	putBody, err := api.DumpMaxi([]map[string]any{updated}, api.DumpOptions{
 		SchemaFile:        "sports.mxs",

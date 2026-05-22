@@ -145,6 +145,106 @@ func LoadGameStatsByGameID(gameID int) (Record, bool) {
 	return nil, false
 }
 
+func LoadGamesWithTeams() []Record {
+	mu.RLock()
+	defer mu.RUnlock()
+	teamMap := make(map[int]Record, len(teams))
+	for _, t := range teams {
+		teamMap[intVal(t["id"])] = t
+	}
+	out := make([]Record, 0, len(games))
+	for _, g := range games {
+		ht, okH := teamMap[intVal(g["homeTeamId"])]
+		at, okA := teamMap[intVal(g["awayTeamId"])]
+		if !okH || !okA {
+			continue
+		}
+		row := make(Record, len(g))
+		for k, v := range g {
+			if k != "homeTeamId" && k != "awayTeamId" {
+				row[k] = v
+			}
+		}
+		row["homeTeam"] = ht
+		row["awayTeam"] = at
+		out = append(out, row)
+	}
+	return out
+}
+
+func LoadGameByIDWithTeams(id int) (Record, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	teamMap := make(map[int]Record, len(teams))
+	for _, t := range teams {
+		teamMap[intVal(t["id"])] = t
+	}
+	for _, g := range games {
+		if intVal(g["id"]) != id {
+			continue
+		}
+		ht, okH := teamMap[intVal(g["homeTeamId"])]
+		at, okA := teamMap[intVal(g["awayTeamId"])]
+		if !okH || !okA {
+			return nil, false
+		}
+		row := make(Record, len(g))
+		for k, v := range g {
+			if k != "homeTeamId" && k != "awayTeamId" {
+				row[k] = v
+			}
+		}
+		row["homeTeam"] = ht
+		row["awayTeam"] = at
+		return row, true
+	}
+	return nil, false
+}
+
+func LoadGameStatsByGameIDWithPlayers(gameID int) (Record, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	var stats Record
+	for _, s := range gameStats {
+		if intVal(s["gameId"]) == gameID {
+			stats = s
+			break
+		}
+	}
+	if stats == nil {
+		return nil, false
+	}
+	enrichStats := func(arr any) []any {
+		items, _ := arr.([]any)
+		out := make([]any, 0, len(items))
+		for _, item := range items {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			// Store player as int ID — DumpMaxi v0.2.0 cannot inline full
+			// player maps inside S[] fields; D is rendered manually instead.
+			row := Record{"player": intVal(m["playerId"])}
+			for k, v := range m {
+				if k != "playerId" {
+					row[k] = v
+				}
+			}
+			out = append(out, row)
+		}
+		return out
+	}
+	result := make(Record)
+	for k, v := range stats {
+		if k != "homePlayers" && k != "awayPlayers" {
+			result[k] = v
+		}
+	}
+	result["homePlayers"] = enrichStats(stats["homePlayers"])
+	result["awayPlayers"] = enrichStats(stats["awayPlayers"])
+	return result, true
+}
+
 // ---------------------------------------------------------------------------
 // Transfers
 // ---------------------------------------------------------------------------
@@ -178,9 +278,15 @@ func LoadTransfersWithRefs(playerID int) []Record {
 		if !okP || !okF || !okT {
 			continue
 		}
+		// Keep player.team as an int ID — the full team is already in the pool
+		// via fromTeam/toTeam, so the reference pool won't have duplicates.
+		pWithTeam := Record{
+			"id": p["id"], "name": p["name"], "position": p["position"],
+			"birthYear": p["birthYear"], "team": p["teamId"],
+		}
 		row := Record{
 			"id":       t["id"],
-			"player":   p,
+			"player":   pWithTeam,
 			"fromTeam": f,
 			"toTeam":   to,
 			"date":     t["date"],
@@ -189,6 +295,56 @@ func LoadTransfersWithRefs(playerID int) []Record {
 		out = append(out, row)
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// Players with team join
+// ---------------------------------------------------------------------------
+
+// LoadPlayersWithTeams returns all players with a nested "team" Record instead of raw "teamId".
+func LoadPlayersWithTeams() []Record {
+	mu.RLock()
+	defer mu.RUnlock()
+	teamMap := make(map[int]Record, len(teams))
+	for _, t := range teams {
+		teamMap[intVal(t["id"])] = t
+	}
+	out := make([]Record, 0, len(players))
+	for _, p := range players {
+		team, ok := teamMap[intVal(p["teamId"])]
+		if !ok {
+			continue
+		}
+		out = append(out, Record{
+			"id": p["id"], "name": p["name"], "position": p["position"],
+			"birthYear": p["birthYear"], "team": Record(team),
+		})
+	}
+	return out
+}
+
+// LoadPlayerByIDWithTeam returns a single player with its team nested, or (nil, false) if not found.
+func LoadPlayerByIDWithTeam(id int) (Record, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	teamMap := make(map[int]Record, len(teams))
+	for _, t := range teams {
+		teamMap[intVal(t["id"])] = t
+	}
+	for _, p := range players {
+		if intVal(p["id"]) != id {
+			continue
+		}
+		team, ok := teamMap[intVal(p["teamId"])]
+		if !ok {
+			return nil, false
+		}
+		return Record{
+			"id": p["id"], "name": p["name"], "position": p["position"],
+			"birthYear": p["birthYear"], "team": Record(team),
+		}, true
+	}
+	return nil, false
 }
 
 // ---------------------------------------------------------------------------

@@ -2,13 +2,16 @@ import express from 'express';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dumpMaxi, parseMaxi } from '@maxi-format/maxi';
+import { dumpMaxi, parseMaxi, getMaxiSchema } from '@maxi-format/maxi';
 import {
-  loadPlayers, savePlayers, loadPlayerById,
+  loadPlayers, savePlayers,
+  loadPlayersWithTeams, loadPlayerByIdWithTeam,
   loadTeams, loadTeamById,
   loadGames, loadGameById, loadGameStatsByGameId,
+  loadGamesWithTeams, loadGameByIdWithTeams, loadGameStatsByGameIdWithPlayers,
   loadTransfersWithRefs,
 } from './dataLoader.js';
+import { Team, Player, PlayerStats, Game, GameDetail, Transfer } from './model.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SHARED    = join(__dirname, '../shared');
@@ -20,76 +23,15 @@ const PORT      = process.env.PORT ?? 4000;
 const loadSchema = name => readFileSync(join(SHARED, name), 'utf8');
 
 // ---------------------------------------------------------------------------
-// Type definitions (mirror sports.mxs — used by dumpMaxi)
-// these are only needed for the dump side; the @schema directive tells the
-// client where to find the full schema.
+// Type definitions — derived from annotated model classes in model.js
 // ---------------------------------------------------------------------------
 
-const T_PLAYER = {
-  alias: 'P', name: 'Player',
-  fields: [
-    { name: 'id',        typeExpr: 'int' },
-    { name: 'name',      constraints: [{ type: 'required' }] },
-    { name: 'position',  typeExpr: 'enum[forward,midfielder,defender,goalkeeper]' },
-    { name: 'birthYear', typeExpr: 'int' },
-    { name: 'teamId',    typeExpr: 'int' },
-  ],
-};
-
-const T_TEAM = {
-  alias: 'T', name: 'Team',
-  fields: [
-    { name: 'id',      typeExpr: 'int' },
-    { name: 'name',    constraints: [{ type: 'required' }] },
-    { name: 'city',    constraints: [{ type: 'required' }] },
-    { name: 'founded', typeExpr: 'int' },
-    { name: 'coach',   constraints: [{ type: 'required' }] },
-  ],
-};
-
-const T_STATS = {
-  alias: 'S', name: 'PlayerStats',
-  fields: [
-    { name: 'playerId',      typeExpr: 'int' },
-    { name: 'goals',         typeExpr: 'int', defaultValue: 0 },
-    { name: 'assists',       typeExpr: 'int', defaultValue: 0 },
-    { name: 'minutesPlayed', typeExpr: 'int', defaultValue: 0 },
-  ],
-};
-
-const T_GAME = {
-  alias: 'G', name: 'Game',
-  fields: [
-    { name: 'id',         typeExpr: 'int' },
-    { name: 'homeTeamId', typeExpr: 'int' },
-    { name: 'awayTeamId', typeExpr: 'int' },
-    { name: 'date',       annotation: 'date', constraints: [{ type: 'required' }] },
-    { name: 'status',     typeExpr: 'enum[scheduled,live,finished,cancelled]' },
-    { name: 'homeScore',  typeExpr: 'int', defaultValue: 0 },
-    { name: 'awayScore',  typeExpr: 'int', defaultValue: 0 },
-  ],
-};
-
-const T_GAME_DETAIL = {
-  alias: 'D', name: 'GameDetail',
-  fields: [
-    { name: 'gameId',      typeExpr: 'int' },
-    { name: 'homePlayers', typeExpr: 'S[]' },
-    { name: 'awayPlayers', typeExpr: 'S[]' },
-  ],
-};
-
-const T_TRANSFER = {
-  alias: 'X', name: 'Transfer',
-  fields: [
-    { name: 'id',       typeExpr: 'int' },
-    { name: 'player',   typeExpr: 'P' },
-    { name: 'fromTeam', typeExpr: 'T' },
-    { name: 'toTeam',   typeExpr: 'T' },
-    { name: 'date',     annotation: 'date', constraints: [{ type: 'required' }] },
-    { name: 'fee',      typeExpr: 'decimal' },
-  ],
-};
+const T_PLAYER      = getMaxiSchema(Player);
+const T_TEAM        = getMaxiSchema(Team);
+const T_STATS       = getMaxiSchema(PlayerStats);
+const T_GAME        = getMaxiSchema(Game);
+const T_GAME_DETAIL = getMaxiSchema(GameDetail);
+const T_TRANSFER    = getMaxiSchema(Transfer);
 
 // ---------------------------------------------------------------------------
 // Helper: build a MAXI response
@@ -151,13 +93,13 @@ app.get('/schema/:name', (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get('/players', (req, res) => {
-  maxiResponse(res, loadPlayers(), 'P', [T_PLAYER]);
+  maxiResponse(res, loadPlayersWithTeams(), 'P', [T_PLAYER, T_TEAM]);
 });
 
 app.get('/players/:id', (req, res) => {
-  const player = loadPlayerById(+req.params.id);
+  const player = loadPlayerByIdWithTeam(+req.params.id);
   if (!player) return res.status(404).set('Content-Type', 'application/maxi').send('');
-  maxiResponse(res, [player], 'P', [T_PLAYER]);
+  maxiResponse(res, [player], 'P', [T_PLAYER, T_TEAM]);
 });
 
 app.post('/players', async (req, res) => {
@@ -175,7 +117,7 @@ app.post('/players', async (req, res) => {
     teamId:    Number(v[4]),
   };
   savePlayers([...players, player]);
-  maxiResponse(res, [player], 'P', [T_PLAYER], 201);
+  maxiResponse(res, [loadPlayerByIdWithTeam(newId)], 'P', [T_PLAYER, T_TEAM], 201);
 });
 
 app.put('/players/:id', async (req, res) => {
@@ -193,7 +135,7 @@ app.put('/players/:id', async (req, res) => {
     teamId:    Number(v[4]),
   };
   savePlayers(players);
-  maxiResponse(res, [players[idx]], 'P', [T_PLAYER]);
+  maxiResponse(res, [loadPlayerByIdWithTeam(id)], 'P', [T_PLAYER, T_TEAM]);
 });
 
 app.delete('/players/:id', (req, res) => {
@@ -228,7 +170,7 @@ app.get('/teams/:id', (req, res) => {
   const team = loadTeamById(+req.params.id);
   if (!team) return res.status(404).set('Content-Type', 'application/maxi').send('');
   // Include roster: players belonging to this team
-  const roster = loadPlayers().filter(p => p.teamId === team.id);
+  const roster = loadPlayersWithTeams().filter(p => p.team?.id === team.id);
   maxiResponse(res, { T: [team], P: roster }, 'T', [T_TEAM, T_PLAYER]);
 });
 
@@ -237,18 +179,19 @@ app.get('/teams/:id', (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get('/games', (req, res) => {
-  maxiResponse(res, loadGames(), 'G', [T_GAME]);
+  maxiResponse(res, loadGamesWithTeams(), 'G', [T_GAME, T_TEAM]);
 });
 
 app.get('/games/:id', (req, res) => {
   const id   = +req.params.id;
-  const game = loadGameById(id);
+  const game = loadGameByIdWithTeams(id);
   if (!game) return res.status(404).set('Content-Type', 'application/maxi').send('');
-  const stats = loadGameStatsByGameId(id);
+  const stats = loadGameStatsByGameIdWithPlayers(id);
   if (stats) {
-    maxiResponse(res, { G: [game], D: [stats] }, 'G', [T_GAME, T_STATS, T_GAME_DETAIL]);
+    const players = [...stats.homePlayers, ...stats.awayPlayers].map(s => s.player);
+    maxiResponse(res, { G: [game], D: [stats], P: players }, 'G', [T_GAME, T_TEAM, T_STATS, T_PLAYER, T_GAME_DETAIL]);
   } else {
-    maxiResponse(res, [game], 'G', [T_GAME]);
+    maxiResponse(res, [game], 'G', [T_GAME, T_TEAM]);
   }
 });
 

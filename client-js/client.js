@@ -31,14 +31,17 @@ const loadSchema = name => readFileSync(join(SHARED, name), 'utf8');
 // ---------------------------------------------------------------------------
 
 class Player {
-  constructor({ id, name, position, birthYear, teamId } = {}) {
+  constructor({ id, name, position, birthYear, team } = {}) {
     this.id        = id;
     this.name      = name;
     this.position  = position;
     this.birthYear = birthYear;
-    this.teamId    = teamId;
+    this.team      = team;
   }
-  toString() { return `Player(${this.id} | ${this.name} | ${this.position} | ${this.birthYear})`; }
+  toString() {
+    const teamStr = this.team instanceof Team ? this.team.name : (this.team?.name ?? this.team);
+    return `Player(${this.id} | ${this.name} | ${this.position} | ${this.birthYear} | ${teamStr})`;
+  }
 }
 
 class Team {
@@ -63,10 +66,48 @@ class Transfer {
   }
   toString() {
     const playerStr   = this.player   instanceof Player ? this.player.name   : `playerId:${this.player}`;
-    const fromStr     = this.fromTeam instanceof Team   ? this.fromTeam.name : `teamId:${this.fromTeam}`;
-    const toStr       = this.toTeam   instanceof Team   ? this.toTeam.name   : `teamId:${this.toTeam}`;
-    const feeStr      = this.fee != null ? `€${Number(this.fee).toLocaleString()}` : 'free';
+    const fromStr     = this.fromTeam instanceof Team   ? this.fromTeam.name : `team:${this.fromTeam}`;
+    const toStr       = this.toTeam   instanceof Team   ? this.toTeam.name   : `team:${this.toTeam}`;
+    const feeStr      = this.fee != null ? `€${Math.round(Number(this.fee))}` : 'free';
     return `Transfer(#${this.id} | ${playerStr} | ${fromStr} → ${toStr} | ${this.date} | ${feeStr})`;
+  }
+}
+
+class PlayerStats {
+  constructor({ player, goals, assists, minutesPlayed } = {}) {
+    this.player       = player;
+    this.goals        = goals        ?? 0;
+    this.assists      = assists      ?? 0;
+    this.minutesPlayed = minutesPlayed ?? 0;
+  }
+  toString() {
+    const playerStr = this.player instanceof Player ? this.player.name : `player:${this.player}`;
+    return `PlayerStats(${playerStr} | ${this.goals}g | ${this.assists}a | ${this.minutesPlayed}min)`;
+  }
+}
+
+class Game {
+  constructor({ id, homeTeam, awayTeam, date, status, homeScore, awayScore } = {}) {
+    this.id        = id;
+    this.homeTeam  = homeTeam;
+    this.awayTeam  = awayTeam;
+    this.date      = date;
+    this.status    = status;
+    this.homeScore = homeScore ?? 0;
+    this.awayScore = awayScore ?? 0;
+  }
+  toString() {
+    const home = this.homeTeam instanceof Team ? this.homeTeam.name : this.homeTeam;
+    const away = this.awayTeam instanceof Team ? this.awayTeam.name : this.awayTeam;
+    return `Game(${this.id} | ${home} vs ${away} | ${this.date} | ${this.homeScore}–${this.awayScore})`;
+  }
+}
+
+class GameDetail {
+  constructor({ gameId, homePlayers, awayPlayers } = {}) {
+    this.gameId      = gameId;
+    this.homePlayers = homePlayers ?? [];
+    this.awayPlayers = awayPlayers ?? [];
   }
 }
 
@@ -140,15 +181,20 @@ section('GET /players  (raw parseMaxi → positional values)');
 {
   const text   = await get('/players');
   const result = await parseMaxi(text, { loadSchema });
-  const rows   = result.records.map(r => r.values);
-  printTable(['id', 'name', 'position', 'birthYear', 'teamId'], rows);
+  const rows   = result.records
+    .filter(r => r.alias === 'P')
+    .map(r => [
+    r.values[0], r.values[1], r.values[2], r.values[3],
+    r.values[4]?.name ?? r.values[4],
+  ]);
+  printTable(['id', 'name', 'position', 'birthYear', 'team'], rows);
 }
 
 // ── 2. GET /players — parseMaxiAs → hydrated Player instances ──────────────
 section('GET /players  (parseMaxiAs → Player class instances)');
 {
   const text = await get('/players');
-  const { objects } = await parseMaxiAs(text, { P: Player }, { loadSchema });
+  const { objects } = await parseMaxiAs(text, { P: Player, T: Team }, { loadSchema });
   objects.P.forEach(p => console.log('  ' + p.toString()));
 }
 
@@ -177,9 +223,18 @@ section('GET /games');
 {
   const text   = await get('/games');
   const result = await parseMaxi(text, { loadSchema });
+  const gReg   = result._objectRegistry;
+  const teamName = id => gReg?.get('T')?.get(String(id))?.name ?? id;
   printTable(
     ['id', 'home', 'away', 'date', 'status', 'score'],
-    result.records.map(r => [...r.values.slice(0, 5), `${r.values[5]}–${r.values[6]}`])
+    result.records.filter(r => r.alias === 'G').map(r => [
+      r.values[0],
+      teamName(r.values[1]),
+      teamName(r.values[2]),
+      r.values[3],
+      r.values[4],
+      `${r.values[5]}\u2013${r.values[6]}`,
+    ])
   );
 }
 
@@ -189,12 +244,19 @@ section('GET /games/1  (GameDetail with nested S[] arrays)');
   const text   = await get('/games/1');
   printRaw('games/1', text);
   const result = await parseMaxi(text, { loadSchema });
+  const reg    = result._objectRegistry;
+  const toRows = arr => (arr || []).map(s => {
+    const p = reg?.get('P')?.get(String(s.player));
+    return [p ? p.name : `#${s.player}`, String(s.goals), String(s.assists), String(s.minutesPlayed)];
+  });
   const detail = result.records.find(r => r.alias === 'D');
   if (detail) {
     const [gameId, homePlayers, awayPlayers] = detail.values;
     console.log(`\n  GameDetail for game ${gameId}:`);
-    console.log(`  Home players stats: ${JSON.stringify(homePlayers)}`);
-    console.log(`  Away players stats: ${JSON.stringify(awayPlayers)}`);
+    console.log('  Home:');
+    printTable(['name', 'goals', 'assists', 'minutes'], toRows(homePlayers));
+    console.log('  Away:');
+    printTable(['name', 'goals', 'assists', 'minutes'], toRows(awayPlayers));
   }
 }
 
@@ -226,16 +288,17 @@ section('GET /players/3/transfers  (Carlos Rivera transfer history)');
 section('POST /players  (MAXI request body → MAXI response)');
 {
   // Build the request body using dumpMaxi so the format is correct
-  const newPlayer = { id: 0, name: 'Luca Bianchi', position: 'forward', birthYear: 2001, teamId: 1 };
+  const newPlayer = { id: 0, name: 'Luca Bianchi', position: 'forward', birthYear: 2001, team: 1 };
   const requestBody = dumpMaxi([newPlayer], {
     schemaFile: 'sports.mxs',
+    includeTypes: false,
     defaultAlias: 'P',
     types: [{ alias: 'P', name: 'Player', fields: [
       { name: 'id', typeExpr: 'int' },
       { name: 'name', constraints: [{ type: 'required' }] },
       { name: 'position', typeExpr: 'enum[forward,midfielder,defender,goalkeeper]' },
       { name: 'birthYear', typeExpr: 'int' },
-      { name: 'teamId', typeExpr: 'int' },
+      { name: 'team', typeExpr: 'T' },
     ]}],
   });
 
@@ -255,13 +318,14 @@ section('POST /players  (MAXI request body → MAXI response)');
     const updated = { ...newPlayer, id: createdId, position: 'midfielder' };
     const putBody = dumpMaxi([updated], {
       schemaFile:   'sports.mxs',
+      includeTypes: false,
       defaultAlias: 'P',
       types: [{ alias: 'P', name: 'Player', fields: [
         { name: 'id', typeExpr: 'int' },
         { name: 'name', constraints: [{ type: 'required' }] },
         { name: 'position', typeExpr: 'enum[forward,midfielder,defender,goalkeeper]' },
         { name: 'birthYear', typeExpr: 'int' },
-        { name: 'teamId', typeExpr: 'int' },
+        { name: 'team', typeExpr: 'T' },
       ]}],
     });
 

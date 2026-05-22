@@ -1,1 +1,1 @@
-maxi-format>=0.1.0
+maxi-format>=0.3.0

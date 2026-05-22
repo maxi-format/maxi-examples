@@ -9,20 +9,20 @@
 # ---------------------------------------------------------------------------
 
 # Player — a footballer registered to a team
-# Fields: id | name (required) | position | birthYear | teamId
-P:Player(id:int|name(!)|position:enum[forward,midfielder,defender,goalkeeper]|birthYear:int|teamId:int)
+# Fields: id | name (required) | position | birthYear | team (object reference)
+P:Player(id:int|name(!)|position:enum[forward,midfielder,defender,goalkeeper]|birthYear:int|team:T)
 
 # Team — a football club
 # Fields: id | name (required) | city (required) | founded | coach (required)
 T:Team(id:int|name(!)|city(!)|founded:int|coach(!))
 
 # PlayerStats — per-player match statistics
-# Fields: playerId | goals (default 0) | assists (default 0) | minutesPlayed (default 0)
-S:PlayerStats(playerId:int|goals:int=0|assists:int=0|minutesPlayed:int=0)
+# Fields: player (object reference) | goals (default 0) | assists (default 0) | minutesPlayed (default 0)
+S:PlayerStats(player:P|goals:int=0|assists:int=0|minutesPlayed:int=0)
 
 # Game — a match between two teams
-# Fields: id | homeTeamId | awayTeamId | date (required) | status | homeScore (default 0) | awayScore (default 0)
-G:Game(id:int|homeTeamId:int|awayTeamId:int|date:str@date(!)|status:enum[scheduled,live,finished,cancelled]|homeScore:int=0|awayScore:int=0)
+# Fields: id | homeTeam (object reference) | awayTeam (object reference) | date (required) | status | homeScore (default 0) | awayScore (default 0)
+G:Game(id:int|homeTeam:T|awayTeam:T|date:str@date(!)|status:enum[scheduled,live,finished,cancelled]|homeScore:int=0|awayScore:int=0)
 
 # GameDetail — full match statistics with nested player stats arrays
 # Fields: gameId | homePlayers (array of PlayerStats) | awayPlayers (array of PlayerStats)
